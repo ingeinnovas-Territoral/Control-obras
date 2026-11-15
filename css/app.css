@@ -76,3 +76,10 @@ details .btn{width:100%}
 .tabs a.activa{color:var(--navy);font-weight:700}
 .toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translate(-50%,20px);opacity:0;background:#16233B;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;transition:.25s;z-index:20;max-width:90vw}
 .toast.ver{opacity:1;transform:translate(-50%,0)}
+.revision:empty{display:none}
+.rev{display:grid;grid-template-columns:24px 120px 1fr;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px}
+.rev input{width:20px;height:20px;min-height:0;margin:0}
+.rev span{color:var(--muted)}
+.rev.no{grid-template-columns:24px 120px 1fr}
+.rev.no::before{content:""}
+.rev.no i{color:var(--muted);font-size:13px}

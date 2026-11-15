@@ -1,5 +1,6 @@
 // Control de Obras — app de campo (funciona sin internet).
 import * as db from "./db.js";
+import { extraerTexto, extraerDatos } from "./contrato.js";
 
 const EMPRESAS = {
   "FLASSSERVIC S.A.S.": { nit: "900.740.386-7" },
@@ -131,16 +132,38 @@ async function vistaDatosObra(id) {
   const o = id ? await db.uno("obras", id) : { empresa: "FLASSSERVIC S.A.S.", inicio: hoy(), plazo: 60 };
   const campo = (lab, name, tipo = "text", extra = {}) =>
     h("label", { class: "campo" }, h("span", {}, lab), h("input", { name, type: tipo, value: o[name] ?? "", ...extra }));
+  let docPendiente = null;
+  const revision = h("div", { class: "revision" });
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault();
       const fd = new FormData(form);
       for (const [k, v] of fd.entries()) o[k] = v;
       o.plazo = Number(o.plazo) || 0; o.aiu = o.aiu === "" ? "" : Number(o.aiu);
+      o.valor = o.valor === "" ? "" : Number(String(o.valor).replace(/[^\d]/g, "")) || "";
+      o.anticipoPct = o.anticipoPct === "" ? "" : Number(o.anticipoPct);
       if (!o.creado) o.creado = new Date().toISOString();
       await db.guardar("obras", o);
+      if (docPendiente) { docPendiente.obraId = o.id; await db.guardar("documentos", docPendiente); }
       toast("Obra guardada");
       ir(`#/obra/${o.id}/${id ? "mas" : "resumen"}`);
     } },
+    h("label", { class: "btn sec" }, "📄 Cargar contrato u orden de servicio (PDF o Word)",
+      h("input", { type: "file", hidden: true, accept: ".pdf,.docx,application/pdf", onchange: async e => {
+        const f = e.target.files[0]; if (!f) return;
+        revision.innerHTML = ""; revision.append(h("div", { class: "nota" }, "Leyendo el documento…"));
+        try {
+          const texto = await extraerTexto(f);
+          docPendiente = { tipo: "Contrato / orden de servicio", nombre: f.name, blob: f, creado: new Date().toISOString() };
+          if (texto.replace(/\s/g, "").length < 200) {
+            revision.innerHTML = "";
+            revision.append(h("div", { class: "alerta" }, "El documento parece escaneado (una imagen): no se puede leer el texto sin internet. Llene los datos a mano; el documento quedará guardado en la obra."));
+            return;
+          }
+          const datos = extraerDatos(texto); docPendiente.datos = datos;
+          mostrarRevision(datos);
+        } catch (err) { revision.innerHTML = ""; revision.append(h("div", { class: "alerta" }, err.message)); }
+      } })),
+    revision,
     campo("Objeto / nombre de la obra *", "nombre", "text", { required: true }),
     h("label", { class: "campo" }, h("span", {}, "Empresa que ejecuta"),
       h("select", { name: "empresa" }, Object.keys(EMPRESAS).map(e => h("option", { value: e, selected: o.empresa === e }, e)))),
@@ -148,10 +171,36 @@ async function vistaDatosObra(id) {
     campo("Entidad contratante", "entidad"),
     h("div", { class: "fila2" }, campo("Municipio", "municipio"), campo("Departamento", "depto")),
     h("div", { class: "fila2" }, campo("Fecha de inicio", "inicio", "date"), campo("Plazo (días)", "plazo", "number", { min: 0, inputmode: "numeric" })),
+    h("div", { class: "fila2" }, campo("Valor del contrato ($)", "valor", "text", { inputmode: "numeric" }), campo("Anticipo (%)", "anticipoPct", "number", { step: "0.01", inputmode: "decimal" })),
+    campo("Fecha de firma del contrato", "fechaContrato", "date"),
     campo("Residente de obra", "residente"),
     campo("Supervisor / interventor", "supervisor"),
     campo("AIU % (solo si el presupuesto no trae VALOR TOTAL)", "aiu", "number", { step: "0.01", inputmode: "decimal" }),
     h("button", { class: "btn grande", type: "submit" }, id ? "Guardar cambios" : "Crear obra"));
+  function mostrarRevision(datos) {
+    const campos = [["empresa", "Contratista"], ["tipoDoc", "Tipo de documento", true], ["contrato", "N.º"], ["nombre", "Objeto", false, "objeto"], ["entidad", "Entidad contratante"],
+      ["valor", "Valor"], ["plazo", "Plazo (días)"], ["municipio", "Municipio"], ["depto", "Departamento"], ["supervisor", "Supervisor"],
+      ["anticipoPct", "Anticipo (%)"], ["fechaContrato", "Fecha de firma"]];
+    revision.innerHTML = "";
+    const filas = [];
+    for (const [k, lab, soloInfo, origen] of campos) {
+      const v = datos[origen || k];
+      if (v === undefined || v === "") { filas.push(h("div", { class: "rev no" }, h("span", {}, lab), h("i", {}, "no encontrado"))); continue; }
+      const mostrar = k === "valor" ? pesos(v) : k === "fechaContrato" ? fechaCorta(v) : k === "plazo" ? `${v} días (${datos.plazoTxt || ""})` : String(v);
+      filas.push(h("label", { class: "rev" }, soloInfo ? h("span", {}) : h("input", { type: "checkbox", checked: true, "data-k": k, "data-v": String(v) }),
+        h("span", {}, lab), h("b", {}, mostrar)));
+    }
+    revision.append(h("div", { class: "tarjeta" },
+      h("div", { class: "t-nom" }, "Esto encontré en el documento"),
+      h("div", { class: "nota" }, "Revise. Lo marcado se copia al formulario y lo puede corregir antes de guardar."),
+      ...filas,
+      h("button", { class: "btn", type: "button", onclick: () => {
+        for (const c of revision.querySelectorAll("input[data-k]")) if (c.checked) {
+          const el = form.elements[c.dataset.k]; if (el) el.value = c.dataset.v;
+        }
+        revision.innerHTML = ""; revision.append(h("div", { class: "nota" }, "✔ Datos copiados. Revise el formulario y guarde."));
+      } }, "Usar estos datos")));
+  }
   pantalla(id ? "Datos de la obra" : "Nueva obra", { atras: id ? `#/obra/${id}/mas` : "#/" }, form);
 }
 
@@ -162,7 +211,7 @@ async function vistaResumen(id) {
   const top = d.items.filter(i => d.ejec[i.id]).slice(0, 8);
   pantalla(o.nombre, { atras: "#/", subtitulo: [o.empresa, o.municipio].filter(Boolean).join(" · ") },
     h("div", { class: "kpis" },
-      kpi("Avance de obra", pct(d.avance), d.cd ? pesos(d.cdEj * d.factor) + " de " + pesos(d.cd * d.factor) : "Cargue el presupuesto"),
+      kpi("Avance de obra", pct(d.avance), d.cd ? pesos(d.cdEj * d.factor) + " de " + pesos(d.cd * d.factor) : (o.valor ? "Contrato " + pesos(o.valor) + " · cargue el presupuesto" : "Cargue el presupuesto")),
       kpi("Tiempo", pct(d.tiempo), o.plazo ? `${Math.min(d.dias, o.plazo)} de ${o.plazo} días` : "Sin plazo"),
       kpi("Bitácora", d.bitacora.length, "días registrados"),
       kpi("Fotos", d.fotos.length, "en la obra")),
@@ -391,11 +440,16 @@ async function vistaMas(id) {
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/presupuesto` }, h("div", { class: "t-nom" }, "Presupuesto"), h("div", { class: "t-sub" }, d.items.length ? `${d.items.length} ítems · costo directo ${pesos(d.cd)}` : "Sin cargar")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/personal` }, h("div", { class: "t-nom" }, "Personal"), h("div", { class: "t-sub" }, `${d.personal.length} persona(s)`)),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/datos` }, h("div", { class: "t-nom" }, "Datos de la obra"), h("div", { class: "t-sub" }, [d.obra.contrato, d.obra.entidad].filter(Boolean).join(" · ") || "Contrato, entidad, plazo…")),
+    h("section", {}, h("h2", {}, "Documentos"),
+      ...(await db.deObra("documentos", id)).map(doc => h("div", { class: "tarjeta fila" },
+        h("div", {}, h("div", { class: "t-nom" }, doc.tipo || "Documento"), h("div", { class: "t-sub" }, doc.nombre)),
+        h("button", { class: "btn mini sec", onclick: () => entregarArchivo(doc.blob, doc.nombre) }, "Abrir"))),
+      h("a", { class: "btn sec", href: `#/obra/${id}/datos` }, "📄 Cargar contrato u orden de servicio")),
     h("button", { class: "btn grande", onclick: () => exportarExcel(id) }, "Exportar a Excel"),
     h("p", { class: "nota" }, "El Excel trae las hojas BITÁCORA y ACTIVIDADES con las mismas columnas de su CONTROL DE OBRA: copie las filas y péguelas allá para sacar actas y memorias."),
     h("button", { class: "btn peligro", onclick: async () => {
       if (prompt('Para borrar la obra completa escriba BORRAR') !== "BORRAR") return;
-      for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos"]) for (const r of await db.deObra(s, id)) await db.borrar(s, r.id);
+      for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "documentos"]) for (const r of await db.deObra(s, id)) await db.borrar(s, r.id);
       await db.borrar("obras", id); ir("#/"); } }, "Borrar esta obra"),
     tabs(id, "mas"));
 }
