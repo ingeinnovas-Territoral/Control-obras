@@ -1,6 +1,7 @@
 // Control de Obras — app de campo (funciona sin internet).
 import * as db from "./db.js";
 import { extraerTexto, extraerDatos } from "./contrato.js";
+import { llenarExcel } from "./miexcel.js";
 
 const EMPRESAS = {
   "FLASSSERVIC S.A.S.": { nit: "900.740.386-7" },
@@ -58,6 +59,7 @@ const ICONOS = {
   doc: "M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h6",
   papelera: "M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
   plata: "M17 8V5a1 1 0 0 0-1-1H6a2 2 0 0 0 0 4h12a1 1 0 0 1 1 1v3m0 4v3a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V6M20 12v4h-4a2 2 0 0 1 0-4h4",
+  excel: "M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 12l4 5M13 12l-4 5",
   lapiz: "M4 20h4L18.5 9.5a2.83 2.83 0 0 0-4-4L4 16v4M13.5 6.5l4 4",
 };
 function ico(n) { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -67,7 +69,7 @@ function anillo(p) {
   const C = 2 * Math.PI * 34, v = Math.max(0, Math.min(1, p)) * C;
   return h("span", { html: `<svg width="84" height="84" viewBox="0 0 80 80"><circle class="pista" cx="40" cy="40" r="34" fill="none" stroke-width="8"/><circle class="valor" cx="40" cy="40" r="34" fill="none" stroke-width="8" stroke-linecap="round" stroke-dasharray="${v.toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 40 40)"/><text class="pct" x="40" y="45" text-anchor="middle" font-size="15">${(p * 100).toLocaleString("es-CO", { maximumFractionDigits: 1 })}%</text></svg>` });
 }
-function etiquetaItem(it) { return (it.codigo ? it.codigo + " – " : "") + it.descripcion; }
+function etiquetaItem(it) { return it.etiqueta || ((it.codigo ? it.codigo + " – " : "") + it.descripcion); }
 function ir(hash) { location.hash = hash; }
 
 // ------------------------------------------------------------------ estado de sincronización
@@ -111,7 +113,7 @@ function pantalla(titulo, { atras, subtitulo, acciones, alta } = {}, ...cuerpo) 
   window.scrollTo(0, 0);
 }
 function tabs(obraId, activa) {
-  const t = [["resumen", "Resumen", "home"], ["bitacora", "Bitácora", "bitacora"], ["avance", "Avance", "avance"], ["fotos", "Fotos", "camara"], ["mas", "Más", "mas"]];
+  const t = [["resumen", "Resumen", "home"], ["bitacora", "Bitácora", "bitacora"], ["avance", "Avance", "avance"], ["fotos", "Fotos", "camara"], ["gastos", "Gastos", "plata"], ["mas", "Más", "mas"]];
   return h("nav", { class: "tabs" }, t.map(([k, n, i]) =>
     h("a", { href: `#/obra/${obraId}/${k}`, class: k === activa ? "activa" : "" }, ico(i), n)));
 }
@@ -267,8 +269,9 @@ async function vistaResumen(id) {
     h("div", { class: "mosaico" },
       h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, ico("bitacora"), "Bitácora de hoy"),
       h("button", { class: "tile verde", onclick: () => tomarFotos(id) }, ico("camara"), "Foto rápida"),
-      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
-      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("plata"), "Tablero · ¿cómo va la plata?")),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("plata"), "Registrar gasto"),
+      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?")),
     top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0))) : null,
     ultFotos.length ? h("section", {}, h("h2", {}, "Últimas fotos"), galeria(ultFotos, id)) : null,
     tabs(id, "resumen"));
@@ -309,11 +312,12 @@ async function vistaDia(id, fecha) {
   const area = (lab, name, ph) => h("label", { class: "campo" }, h("span", {}, lab), h("textarea", { name, rows: 3, placeholder: ph || "" }, b[name] || ""));
   const avDia = d.avances.filter(a => a.fecha === fecha);
   const foDia = d.fotos.filter(f => f.fecha === fecha);
+  const gaDia = (await db.deObra("gastos", id)).filter(g => g.fecha === fecha);
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault();
       const fd = new FormData(form);
       for (const k of ["clima", "precipitacion", "afecto", "jornada", "horas", "charla", "epp", "incidentes", "ambiental", "novedades"]) b[k] = fd.get(k) ?? "";
-      b.horas = Number(b.horas) || 0;
+      b.horas = String(b.horas).trim() === "" ? "" : Number(b.horas) || 0;
       b.ausentes = [...form.querySelectorAll("input[name=presente]")].filter(c => !c.checked).map(c => c.value);
       await db.guardar("bitacora", b);
       toast("Día guardado"); ir(`#/obra/${id}/bitacora`);
@@ -344,6 +348,9 @@ async function vistaDia(id, fecha) {
     h("section", {}, h("h2", {}, "Fotos de este día"),
       foDia.length ? galeria(foDia, id) : h("div", { class: "nota" }, "Sin fotos este día."),
       h("button", { class: "btn sec", onclick: () => tomarFotos(id, { fecha }) }, ico("camara"), "Tomar fotos de este día")),
+    h("section", {}, h("h2", {}, "Gastos de este día"),
+      gaDia.length ? gaDia.map(g => filaGasto(g, id)) : h("div", { class: "nota" }, "Sin gastos este día."),
+      h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/gastos/nuevo/${fecha}`) }, ico("plata"), "Registrar gasto de este día")),
     d.bitacora.find(x => x.fecha === fecha) ? h("button", { class: "btn peligro", onclick: async () => {
       if (!confirm("¿Borrar la bitácora de este día? (no borra el avance ni las fotos)")) return;
       await db.borrar("bitacora", b.id); ir(`#/obra/${id}/bitacora`); } }, "Borrar este día") : null);
@@ -554,6 +561,112 @@ function curva(d, gastos, valorContrato) {
     h("div", { class: "leyenda" }, o.plazo ? h("span", { class: "lg lg-prog" }, "Programado") : null, h("span", { class: "lg lg-ej" }, "Ejecutado"), h("span", { class: "lg lg-gas" }, "Gastado")));
 }
 
+// ------------------------------------------------------------------ OBRA: gastos
+function filaGasto(g, id) {
+  return h("a", { class: "tarjeta gasto", href: `#/obra/${id}/gastos/${g.id}` },
+    h("div", { class: "g-top" }, h("span", { class: "t-emp" }, g.tipo || "Gasto"), h("b", { class: "g-val" }, pesos(g.valor))),
+    h("div", { class: "t-nom" }, g.detalle || "(sin detalle)"),
+    h("div", { class: "t-sub" }, [fechaCorta(g.fecha), g.proveedor, g.inversionista === "Otro" ? (g.otro || "Otro") : g.inversionista, g.soporte ? "con soporte" : ""].filter(Boolean).join(" · ")));
+}
+async function vistaGastos(id) {
+  const d = await cargarObra(id);
+  const gastos = (await db.deObra("gastos", id)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.creado || "").localeCompare(a.creado || ""));
+  const total = gastos.reduce((t, g) => t + (Number(g.valor) || 0), 0);
+  const mes = hoy().slice(0, 7), delMes = gastos.filter(g => (g.fecha || "").startsWith(mes)).reduce((t, g) => t + (Number(g.valor) || 0), 0);
+  pantalla("Gastos de la obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
+    h("div", { class: "kpis" }, kpi("Total gastado", pesos(total), `${gastos.length} gasto(s)`), kpi("Este mes", pesos(delMes), "")),
+    h("button", { class: "btn grande verde", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("sumar"), "Registrar gasto"),
+    h("a", { class: "btn sec", href: `#/obra/${id}/tablero` }, ico("avance"), "Ver tablero · ¿cómo va la plata?"),
+    gastos.length ? gastos.map(g => filaGasto(g, id)) : h("div", { class: "vacio" }, "Sin gastos registrados."),
+    tabs(id, "gastos"));
+}
+async function vistaFormGasto(id, gId, fechaIni) {
+  const d = await cargarObra(id);
+  const g = gId !== "nuevo" ? await db.uno("gastos", gId) : { obraId: id, fecha: fechaIni || hoy(), tipo: "Materiales", inversionista: "", creado: new Date().toISOString() };
+  if (!g) return ir(`#/obra/${id}/gastos`);
+  let soporte = g.soporte || null;
+  const vistaSop = h("div", {});
+  const pintarSop = () => { vistaSop.innerHTML = ""; if (soporte) vistaSop.append(h("img", { class: "foto-grande", src: URL.createObjectURL(soporte), alt: "Soporte" })); };
+  const sel = (name, ops, val) => h("select", { name }, ops.map(x => h("option", { value: x, selected: val === x }, x || "— Sin asignar —")));
+  const valor = h("input", { name: "valor", inputmode: "numeric", required: true, value: g.valor ? Math.round(g.valor).toLocaleString("es-CO") : "",
+    oninput: () => { const n = valor.value.replace(/\D/g, ""); valor.value = n ? Number(n).toLocaleString("es-CO") : ""; } });
+  const form = h("form", { class: "form", onsubmit: async ev => {
+      ev.preventDefault(); const fd = new FormData(form);
+      g.valor = Number(String(fd.get("valor")).replace(/\D/g, "")) || 0;
+      if (!g.valor) return alert("Escriba el valor del gasto.");
+      for (const k of ["fecha", "tipo", "detalle", "proveedor", "factura", "item", "inversionista", "otro"]) g[k] = (fd.get(k) ?? "").trim();
+      g.soporte = soporte || undefined;
+      await db.guardar("gastos", g); toast("Gasto guardado"); history.back();
+    } },
+    h("div", { class: "fila2" },
+      h("label", { class: "campo" }, h("span", {}, "Fecha"), h("input", { type: "date", name: "fecha", value: g.fecha, required: true })),
+      h("label", { class: "campo" }, h("span", {}, "Tipo de gasto"), sel("tipo", TIPOS_GASTO, g.tipo))),
+    h("label", { class: "campo" }, h("span", {}, "Valor ($)"), valor),
+    h("label", { class: "campo" }, h("span", {}, "Detalle"), h("input", { name: "detalle", value: g.detalle || "", placeholder: "Compra de cemento, pago maestro…" })),
+    h("label", { class: "campo" }, h("span", {}, "Proveedor / beneficiario"), h("input", { name: "proveedor", value: g.proveedor || "" })),
+    h("label", { class: "campo" }, h("span", {}, "No. factura / soporte"), h("input", { name: "factura", value: g.factura || "" })),
+    h("div", { class: "fila2" },
+      h("label", { class: "campo" }, h("span", {}, "Inversionista"), sel("inversionista", ["", ...INVERSIONISTAS], g.inversionista || "")),
+      h("label", { class: "campo" }, h("span", {}, "Si es otro: ¿quién?"), h("input", { name: "otro", value: g.otro || "" }))),
+    h("label", { class: "campo" }, h("span", {}, "Ítem del presupuesto (opcional)"),
+      h("select", { name: "item" }, h("option", { value: "" }, "— Ninguno —"), d.items.map(it => h("option", { selected: g.item === etiquetaItem(it) }, etiquetaItem(it))))),
+    h("label", { class: "btn sec" }, ico("camara"), "Foto de la factura o soporte",
+      h("input", { type: "file", accept: "image/*", hidden: true, onchange: async e => { const f = e.target.files[0]; if (f) { soporte = await comprimir(f); pintarSop(); } } })),
+    vistaSop,
+    h("button", { class: "btn grande", type: "submit" }, "Guardar gasto"));
+  pintarSop();
+  pantalla(gId === "nuevo" ? "Registrar gasto" : "Editar gasto", { atras: `#/obra/${id}/gastos`, subtitulo: d.obra.nombre }, form,
+    gId !== "nuevo" ? h("button", { class: "btn peligro", onclick: async () => {
+      if (!confirm("¿Borrar este gasto?")) return; await db.borrar("gastos", g.id); history.back(); } }, "Borrar gasto") : null);
+}
+
+// ------------------------------------------------------------------ OBRA: mi Excel de control al día
+async function plantillaDe(id) {
+  return (await db.deObra("documentos", id)).filter(x => x.tipo === "excel-control").sort((a, b) => (b.creado || "").localeCompare(a.creado || ""))[0];
+}
+async function seccionMiExcel(id) {
+  const pl = await plantillaDe(id);
+  const elegir = h("label", { class: "btn " + (pl ? "sec" : "") }, ico("subir"), pl ? "Usar otro archivo de Excel" : "Elegir mi Excel de control",
+    h("input", { type: "file", hidden: true, accept: ".xlsm,.xlsx", onchange: async e => {
+      const f = e.target.files[0]; if (!f) return;
+      await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: f.name, blob: new Blob([await f.arrayBuffer()], { type: f.type }), creado: new Date().toISOString() });
+      await descargarMiExcel(id);
+    } }));
+  return h("section", { class: "tarjeta" }, h("h2", {}, "Mi Excel de control"),
+    h("p", { class: "nota" }, pl ? `Archivo: ${pl.nombre}. La app le devuelve ese mismo Excel con bitácora, actividades, gastos y personal al día; fórmulas, actas y macros quedan igual.`
+      : "Elija su archivo CONTROL DE OBRA y la app se lo devuelve con bitácora, actividades, gastos y personal al día."),
+    h("div", { class: "acciones" },
+      pl ? h("button", { class: "btn grande", onclick: () => descargarMiExcel(id) }, ico("excel"), "Descargar mi Excel al día") : null,
+      elegir));
+}
+async function descargarMiExcel(id) {
+  const pl = await plantillaDe(id); if (!pl) return;
+  toast("Armando su Excel…");
+  try {
+    const d = await cargarObra(id);
+    const enOrden = (a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.creado || "").localeCompare(b.creado || "");
+    const gastos = (await db.deObra("gastos", id)).sort(enOrden);
+    const serie = s => { if (!s) return ""; const [y, m, dd] = s.split("-").map(Number); return (Date.UTC(y, m - 1, dd) - Date.UTC(1899, 11, 30)) / 864e5; };
+    const datos = {
+      BITACORA: d.bitacora.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(b => ({ fecha: serie(b.fecha), jornada: b.jornada === "Normal" ? "" : b.jornada,
+        horas: b.horas === "" || b.horas == null ? "" : Number(b.horas), clima: b.clima, precipitacion: b.precipitacion, afecto: b.afecto, ausentes: (b.ausentes || []).join(", "),
+        charla: b.charla, epp: b.epp, incidentes: b.incidentes, ambiental: b.ambiental, novedades: b.novedades })),
+      ACTIVIDADES: d.avances.sort(enOrden).map(a => {
+        const it = d.items.find(i => i.id === a.itemId);
+        return { fecha: serie(a.fecha), actividad: it ? etiquetaItem(it) : "", cantidad: Number(a.cantidad) || 0, frente: a.frente, equipo: a.equipo };
+      }),
+      GASTOS: gastos.map(g => ({ fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: Number(g.valor) || 0,
+        item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: g.abonoA })),
+      PERSONAL: d.personal.map(p => ({ cargo: p.cargo, nombre: p.nombre, cant: Number(p.cant) || 1 })),
+    };
+    const { blob, informe } = await llenarExcel(await pl.blob.arrayBuffer(), datos);
+    console.log("Mi Excel:", informe.join(" | "));
+    const base = pl.nombre.replace(/\.(xlsm|xlsx)$/i, "").replace(/ \(al \d{2}-\d{2}-\d{4}\)$/, "");
+    const ext = /\.xlsx$/i.test(pl.nombre) ? ".xlsx" : ".xlsm";
+    await entregarArchivo(blob, `${base} (al ${fechaCorta(hoy()).replace(/\//g, "-")})${ext}`);
+  } catch (err) { console.error(err); alert("No pude armar el Excel: " + err.message); }
+}
+
 async function vistaMas(id) {
   const d = await cargarObra(id);
   pantalla("Más", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
@@ -563,10 +676,11 @@ async function vistaMas(id) {
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/datos` }, h("div", { class: "t-nom" }, "Datos de la obra"), h("div", { class: "t-sub" }, [d.obra.contrato, d.obra.entidad].filter(Boolean).join(" · ") || "Contrato, entidad, plazo…")),
     h("section", {}, h("h2", {}, "Documentos"),
       ...(await db.deObra("documentos", id)).map(doc => h("div", { class: "tarjeta fila" },
-        h("div", {}, h("div", { class: "t-nom" }, doc.tipo || "Documento"), h("div", { class: "t-sub" }, doc.nombre)),
+        h("div", {}, h("div", { class: "t-nom" }, doc.tipo === "excel-control" ? "Excel de control (original importado)" : (doc.tipo || "Documento")), h("div", { class: "t-sub" }, doc.nombre)),
         h("button", { class: "btn mini sec", onclick: () => entregarArchivo(doc.blob, doc.nombre) }, "Abrir"))),
       h("a", { class: "btn sec", href: `#/obra/${id}/datos` }, "📄 Cargar contrato u orden de servicio")),
-    h("button", { class: "btn grande", onclick: () => exportarExcel(id) }, ico("bajar"), "Exportar a Excel"),
+    await seccionMiExcel(id),
+    h("button", { class: "btn sec", onclick: () => exportarExcel(id) }, ico("bajar"), "Exportar tablas sueltas (Excel simple)"),
     h("p", { class: "nota" }, "El Excel trae las hojas BITÁCORA y ACTIVIDADES con las mismas columnas de su CONTROL DE OBRA: copie las filas y péguelas allá para sacar actas y memorias."),
     h("button", { class: "btn peligro", onclick: async () => {
       if (await borrarObra(id, d.obra.nombre)) ir("#/"); } }, "Borrar esta obra"),
@@ -714,7 +828,8 @@ async function importarControl(file) {
   const items = [];
   for (let r = 8; r < pres.length; r++) {
     const f = pres[r]; const desc = txt(f[1]), cant = Number(f[3]), vu = Number(f[4]);
-    if (desc && cant > 0 && vu > 0) items.push({ codigo: codigo(f[0]), descripcion: desc, und: txt(f[2]), cantidad: cant, vu, orden: items.length });
+    if (desc && cant > 0 && vu > 0) items.push({ codigo: codigo(f[0]), descripcion: desc, und: txt(f[2]), cantidad: cant, vu, orden: items.length,
+      etiqueta: txt(f[10]).includes(desc.slice(0, 10)) ? txt(f[10]) : undefined });
   }
   await db.reemplazarDeObra("items", id, items);
   const porCodigo = new Map(items.map(i => [i.codigo, i.id]));
@@ -724,13 +839,13 @@ async function importarControl(file) {
   let nPer = 0;
   for (let r = 8; per && r < per.length; r++) {
     const nom = txt(per[r][1]); if (!nom) continue;
-    await db.guardar("personal", { obraId: id, cargo: txt(per[r][0]), nombre: nom }); nPer++;
+    await db.guardar("personal", { obraId: id, cargo: txt(per[r][0]), nombre: nom, cant: Number(per[r][2]) || 1 }); nPer++;
   }
   // bitácora (una fila por día)
   let nBit = 0;
   for (let r = 8; bit && r < bit.length; r++) {
     const f = bit[r]; const fecha = fechaIso(f[0]); if (!fecha) continue;
-    await db.guardar("bitacora", { obraId: id, fecha, jornada: txt(f[1]) || "Normal", horas: Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
+    await db.guardar("bitacora", { obraId: id, fecha, jornada: txt(f[1]) || "Normal", horas: txt(f[2]) === "" ? "" : Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
       afecto: txt(f[5]) || "No", ausentes: txt(f[6]) ? txt(f[6]).split(",").map(x => x.trim()).filter(Boolean) : [],
       charla: txt(f[8]), epp: txt(f[9]), incidentes: txt(f[10]), ambiental: txt(f[11]), novedades: txt(f[12]) });
     nBit++;
@@ -742,10 +857,10 @@ async function importarControl(file) {
     if (!fecha || !(cant > 0)) continue;
     const itemId = porEtiqueta.get(txt(f[1]).toLowerCase()) || porCodigo.get(codigo(f[2])) || porCodigo.get(txt(f[1]).split(" – ")[0]);
     if (!itemId) { sinItem++; continue; }
-    await db.guardar("avances", { obraId: id, fecha, itemId, cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), creado: new Date().toISOString() });
+    await db.guardar("avances", { obraId: id, fecha, itemId, cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), orden: r, creado: new Date().toISOString() });
     nAct++;
   }
-  // gastos (se guardan para la próxima etapa)
+  // gastos
   let nGas = 0;
   if (gas) {
     const hr = gas.findIndex(f => txt(f[0]).toUpperCase() === "FECHA" && txt(f[1]).toUpperCase().startsWith("TIPO"));
@@ -753,10 +868,11 @@ async function importarControl(file) {
       const f = gas[r]; const valor = Number(f[5]);
       if (!(valor > 0)) continue;
       await db.guardar("gastos", { obraId: id, fecha: fechaIso(f[0]), tipo: txt(f[1]), detalle: txt(f[2]), proveedor: txt(f[3]), factura: txt(f[4]),
-        valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]) });
+        valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]), orden: r, creado: new Date().toISOString() });
       nGas++;
     }
   }
+  await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: file.name, blob: new Blob([await file.arrayBuffer()], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }), creado: new Date().toISOString() });
   const resumen = `Importado: ${items.length} ítems, ${nPer} personas, ${nBit} días de bitácora, ${nAct} avances` + (nGas ? `, ${nGas} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
   return { id, resumen };
 }
@@ -822,6 +938,7 @@ async function rutear() {
       if (v === "foto") return await vistaFoto(id, p[3]);
       if (v === "mas") return await vistaMas(id);
       if (v === "tablero") return await vistaTablero(id);
+      if (v === "gastos") return p[3] ? await vistaFormGasto(id, p[3], p[4]) : await vistaGastos(id);
       if (v === "presupuesto") return await vistaPresupuesto(id);
       if (v === "personal") return await vistaPersonal(id);
       if (v === "datos") return await vistaDatosObra(id);

@@ -123,7 +123,7 @@ details .btn{width:100%}
 .o{text-align:center;color:var(--muted);font-size:13px}
 
 /* barra inferior */
-.tabs{position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:5;display:grid;grid-template-columns:repeat(5,1fr);background:var(--card);border:1px solid var(--line);border-radius:22px;padding:6px;box-shadow:0 8px 24px rgba(22,35,59,.14);max-width:740px;margin:0 auto}
+.tabs{position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:5;display:grid;grid-template-columns:repeat(6,1fr);background:var(--card);border:1px solid var(--line);border-radius:22px;padding:6px;box-shadow:0 8px 24px rgba(22,35,59,.14);max-width:740px;margin:0 auto}
 .tabs a{display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 0 5px;font-size:11px;color:var(--muted);text-decoration:none;border-radius:16px;transition:background .2s,color .2s}
 .tabs a .ic{width:22px;height:22px}
 .tabs a.activa{color:var(--navy);background:var(--navy-soft);font-weight:700}
@@ -172,3 +172,8 @@ section.tarjeta h2{margin:0 0 10px}
 .lg::before{content:"";display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
 .lg-prog::before{background:#9CA3AF}.lg-ej::before{background:var(--green)}.lg-gas::before{background:#E24B4A}
 .cifra b{white-space:nowrap}
+.tabs a{font-size:10.5px}
+.g-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.g-val{font-size:17px;color:var(--navy);white-space:nowrap}
+@media (prefers-color-scheme: dark){.g-val{color:#E7ECF5}}
+.tarjeta.gasto .t-emp{margin-bottom:0}
