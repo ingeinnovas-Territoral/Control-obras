@@ -632,12 +632,23 @@ async function seccionMiExcel(id) {
       await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: f.name, blob: new Blob([await f.arrayBuffer()], { type: f.type }), creado: new Date().toISOString() });
       await descargarMiExcel(id);
     } }));
+  const subir = h("label", { class: "btn verde" }, ico("subir"), "Cargar Excel actualizado del computador",
+    h("input", { type: "file", hidden: true, accept: ".xlsm,.xlsx", onchange: async e => {
+      const f = e.target.files[0]; if (!f) return;
+      toast("Leyendo el Excel…");
+      try { const r = await actualizarDesdeExcel(id, f); if (r) { toast(r.resumen); ir(`#/obra/${id}/resumen`); } }
+      catch (err) { console.error(err); alert(err.message); }
+      e.target.value = "";
+    } }));
   return h("section", { class: "tarjeta" }, h("h2", {}, "Mi Excel de control"),
     h("p", { class: "nota" }, pl ? `Archivo: ${pl.nombre}. La app le devuelve ese mismo Excel con bitácora, actividades, gastos y personal al día; fórmulas, actas y macros quedan igual.`
       : "Elija su archivo CONTROL DE OBRA y la app se lo devuelve con bitácora, actividades, gastos y personal al día."),
     h("div", { class: "acciones" },
       pl ? h("button", { class: "btn grande", onclick: () => descargarMiExcel(id) }, ico("excel"), "Descargar mi Excel al día") : null,
-      elegir));
+      subir,
+      pl ? null : elegir),
+    pl ? h("p", { class: "nota" }, "¿Lo trabajó en el computador? Use \"Cargar mi Excel actualizado\" y la obra queda igual al archivo. Desde ese momento, \"Descargar\" parte de ese archivo.") : null,
+    pl ? h("details", {}, h("summary", { class: "nota" }, "Otras opciones"), elegir) : null);
 }
 async function descargarMiExcel(id) {
   const pl = await plantillaDe(id); if (!pl) return;
@@ -791,10 +802,12 @@ function leerPresupuesto(filas) {
 }
 
 // ------------------------------------------------------------------ importar una obra desde el Excel CONTROL DE OBRA
-async function importarControl(file) {
-  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+// Lee un Excel CONTROL DE OBRA y devuelve sus datos (sin guardar nada).
+async function leerControl(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
   const hoja = nombre => {
-    const n = wb.SheetNames.find(x => x.replace(/^[\d.\-)\s]+/, "").trim().toUpperCase() === nombre);
+    const n = wb.SheetNames.find(x => x.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/^[\d.\-)\s]+/, "").trim().toUpperCase() === nombre);
     return n ? XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }) : null;
   };
   const ini = hoja("INICIO"), pres = hoja("PRESUPUESTO"), per = hoja("PERSONAL"), bit = hoja("BITACORA"), act = hoja("ACTIVIDADES"), gas = hoja("GASTOS");
@@ -812,69 +825,118 @@ async function importarControl(file) {
   const busca = pref => { const k = Object.keys(lab).find(x => x.startsWith(pref)); return k ? lab[k] : ""; };
   const emp = txt(busca("contratista")).toUpperCase();
   const obra = {
-    nombre: txt(busca("objeto")) || file.name.replace(/\.[^.]+$/, ""),
-    contrato: txt(busca("contrato")), entidad: txt(busca("entidad")), municipio: txt(busca("municipio")), depto: txt(busca("departamento")),
+    nombre: txt(busca("objeto")), contrato: txt(busca("contrato")), entidad: txt(busca("entidad")), municipio: txt(busca("municipio")), depto: txt(busca("departamento")),
     inicio: fechaIso(busca("fecha de inicio")), plazo: Number(busca("plazo")) || 0,
-    empresa: emp.includes("INGEINNOVA") ? "INGEINNOVA TERRITORIAL S.A.S." : emp.includes("FLASS") ? "FLASSSERVIC S.A.S." : "Otra",
+    empresa: emp.includes("INGEINNOVA") ? "INGEINNOVA TERRITORIAL S.A.S." : emp.includes("FLASS") ? "FLASSSERVIC S.A.S." : "",
     residente: txt(busca("firma 1 – nombre")), supervisor: txt(busca("firma 3 – nombre")),
-    creado: new Date().toISOString(), origen: file.name,
   };
   const vc = busca("valor del contrato"); if (typeof vc === "number") obra.totalPresupuesto = vc;
   const aiu = busca("aiu %"); if (typeof aiu === "number" && !obra.totalPresupuesto) obra.aiu = Math.round(aiu * 10000) / 100;
-  await db.guardar("obras", obra);
-  const id = obra.id;
 
-  // presupuesto (hoja PRESUPUESTO: ítem, descripción, und, cantidad, valor unitario desde la fila 9)
   const items = [];
   for (let r = 8; r < pres.length; r++) {
     const f = pres[r]; const desc = txt(f[1]), cant = Number(f[3]), vu = Number(f[4]);
     if (desc && cant > 0 && vu > 0) items.push({ codigo: codigo(f[0]), descripcion: desc, und: txt(f[2]), cantidad: cant, vu, orden: items.length,
       etiqueta: txt(f[10]).includes(desc.slice(0, 10)) ? txt(f[10]) : undefined });
   }
-  await db.reemplazarDeObra("items", id, items);
-  const porCodigo = new Map(items.map(i => [i.codigo, i.id]));
-  const porEtiqueta = new Map(items.map(i => [etiquetaItem(i).toLowerCase(), i.id]));
-
-  // personal
-  let nPer = 0;
+  const personal = [];
   for (let r = 8; per && r < per.length; r++) {
-    const nom = txt(per[r][1]); if (!nom) continue;
-    await db.guardar("personal", { obraId: id, cargo: txt(per[r][0]), nombre: nom, cant: Number(per[r][2]) || 1 }); nPer++;
+    const nom = txt(per[r][1]); if (nom) personal.push({ cargo: txt(per[r][0]), nombre: nom, cant: Number(per[r][2]) || 1 });
   }
-  // bitácora (una fila por día)
-  let nBit = 0;
+  const bitacora = [];
   for (let r = 8; bit && r < bit.length; r++) {
     const f = bit[r]; const fecha = fechaIso(f[0]); if (!fecha) continue;
-    await db.guardar("bitacora", { obraId: id, fecha, jornada: txt(f[1]) || "Normal", horas: txt(f[2]) === "" ? "" : Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
+    bitacora.push({ fecha, jornada: txt(f[1]) || "Normal", horas: txt(f[2]) === "" ? "" : Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
       afecto: txt(f[5]) || "No", ausentes: txt(f[6]) ? txt(f[6]).split(",").map(x => x.trim()).filter(Boolean) : [],
       charla: txt(f[8]), epp: txt(f[9]), incidentes: txt(f[10]), ambiental: txt(f[11]), novedades: txt(f[12]) });
-    nBit++;
   }
-  // actividades → avance
-  let nAct = 0, sinItem = 0;
+  const actividades = [];
   for (let r = 8; act && r < act.length; r++) {
     const f = act[r]; const fecha = fechaIso(f[0]); const cant = Number(f[3]);
     if (!fecha || !(cant > 0)) continue;
-    const itemId = porEtiqueta.get(txt(f[1]).toLowerCase()) || porCodigo.get(codigo(f[2])) || porCodigo.get(txt(f[1]).split(" – ")[0]);
-    if (!itemId) { sinItem++; continue; }
-    await db.guardar("avances", { obraId: id, fecha, itemId, cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), orden: r, creado: new Date().toISOString() });
-    nAct++;
+    actividades.push({ fecha, etiqueta: txt(f[1]), codigo: codigo(f[2]), cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), orden: r });
   }
-  // gastos
-  let nGas = 0;
+  const gastos = [];
   if (gas) {
     const hr = gas.findIndex(f => txt(f[0]).toUpperCase() === "FECHA" && txt(f[1]).toUpperCase().startsWith("TIPO"));
     for (let r = hr + 1; hr >= 0 && r < gas.length; r++) {
       const f = gas[r]; const valor = Number(f[5]);
       if (!(valor > 0)) continue;
-      await db.guardar("gastos", { obraId: id, fecha: fechaIso(f[0]), tipo: txt(f[1]), detalle: txt(f[2]), proveedor: txt(f[3]), factura: txt(f[4]),
-        valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]), orden: r, creado: new Date().toISOString() });
-      nGas++;
+      gastos.push({ fecha: fechaIso(f[0]), tipo: txt(f[1]), detalle: txt(f[2]), proveedor: txt(f[3]), factura: txt(f[4]),
+        valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]), orden: r });
     }
   }
-  await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: file.name, blob: new Blob([await file.arrayBuffer()], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }), creado: new Date().toISOString() });
-  const resumen = `Importado: ${items.length} ítems, ${nPer} personas, ${nBit} días de bitácora, ${nAct} avances` + (nGas ? `, ${nGas} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
+  return { buf, obra, items, personal, bitacora, actividades, gastos };
+}
+
+// Guarda lo leído en una obra: nueva (obraId vacío) o existente (la actualiza con lo del Excel; conserva fotos).
+async function aplicarControl(file, x, obraId) {
+  const ahora = new Date().toISOString();
+  let obra;
+  if (obraId) {
+    obra = await db.uno("obras", obraId);
+    for (const [k, v] of Object.entries(x.obra)) if (v !== "" && v !== 0 && v != null) obra[k] = v;
+    await db.guardar("obras", obra);
+  } else {
+    obra = { ...x.obra, nombre: x.obra.nombre || file.name.replace(/\.[^.]+$/, ""), empresa: x.obra.empresa || "Otra", creado: ahora, origen: file.name };
+    await db.guardar("obras", obra);
+  }
+  const id = obra.id;
+  // presupuesto: conserva los ids de ítems iguales (así las fotos y avances siguen ligados)
+  const viejosIt = obraId ? await db.deObra("items", id) : [];
+  const llave = i => (i.codigo + "|" + i.descripcion).toLowerCase();
+  const mapaIt = new Map(viejosIt.map(i => [llave(i), i.id]));
+  for (const it of x.items) { const v = mapaIt.get(llave(it)); if (v) it.id = v; }
+  await db.reemplazarDeObra("items", id, x.items);
+  const porCodigo = new Map(x.items.map(i => [i.codigo, i.id]));
+  const porEtiqueta = new Map(x.items.map(i => [etiquetaItem(i).toLowerCase(), i.id]));
+  await db.reemplazarDeObra("personal", id, x.personal);
+  await db.reemplazarDeObra("bitacora", id, x.bitacora);
+  let sinItem = 0;
+  const avances = [];
+  for (const a of x.actividades) {
+    const itemId = porEtiqueta.get(a.etiqueta.toLowerCase()) || porCodigo.get(a.codigo) || porCodigo.get(a.etiqueta.split(" – ")[0]);
+    if (!itemId) { sinItem++; continue; }
+    avances.push({ fecha: a.fecha, itemId, cantidad: a.cantidad, frente: a.frente, equipo: a.equipo, orden: a.orden, creado: ahora });
+  }
+  await db.reemplazarDeObra("avances", id, avances);
+  // gastos: conserva la foto de soporte de los que ya existían (misma fecha, valor y detalle)
+  const viejosGa = obraId ? await db.deObra("gastos", id) : [];
+  const llaveG = g => `${g.fecha}|${Math.round(g.valor)}|${(g.detalle || "").toLowerCase().trim()}`;
+  const sop = new Map(viejosGa.filter(g => g.soporte).map(g => [llaveG(g), g.soporte]));
+  for (const g of x.gastos) { g.creado = ahora; const s = sop.get(llaveG(g)); if (s) g.soporte = s; }
+  await db.reemplazarDeObra("gastos", id, x.gastos);
+  await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: file.name, blob: new Blob([x.buf], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }), creado: ahora });
+  const resumen = `${obraId ? "Actualizado" : "Importado"}: ${x.items.length} ítems, ${x.personal.length} personas, ${x.bitacora.length} días de bitácora, ${avances.length} avances` +
+    (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
   return { id, resumen };
+}
+
+async function importarControl(file) { return aplicarControl(file, await leerControl(file), null); }
+
+// Carga el Excel que el usuario actualizó en el computador sobre una obra que ya existe.
+async function actualizarDesdeExcel(id, file) {
+  const x = await leerControl(file);
+  const [bit, av, ga] = await Promise.all([db.deObra("bitacora", id), db.deObra("avances", id), db.deObra("gastos", id)]);
+  const o = await db.uno("obras", id);
+  const otraObra = x.obra.contrato && o.contrato && x.obra.contrato !== o.contrato;
+  const faltan = [];
+  const fechasX = new Set(x.bitacora.map(b => b.fecha));
+  const diasSolo = bit.filter(b => !fechasX.has(b.fecha)).length; if (diasSolo) faltan.push(`${diasSolo} día(s) de bitácora`);
+  const items = await db.deObra("items", id);
+  const etq = new Map(items.map(i => [i.id, etiquetaItem(i).toLowerCase()]));
+  const kA = (f, e, c) => `${f}|${e}|${Math.round(Number(c) * 1000)}`;
+  const avX = new Set(x.actividades.map(a => kA(a.fecha, a.etiqueta.toLowerCase(), a.cantidad)));
+  const avSolo = av.filter(a => !avX.has(kA(a.fecha, etq.get(a.itemId) || "", a.cantidad))).length; if (avSolo) faltan.push(`${avSolo} avance(s)`);
+  const kG = g => `${g.fecha}|${Math.round(Number(g.valor))}|${(g.detalle || "").toLowerCase().trim()}`;
+  const gaX = new Set(x.gastos.map(kG));
+  const gaSolo = ga.filter(g => !gaX.has(kG(g))).length; if (gaSolo) faltan.push(`${gaSolo} gasto(s)`);
+  let msg = `El Excel trae ${x.bitacora.length} días de bitácora, ${x.actividades.length} actividades y ${x.gastos.length} gastos.\n` +
+    `La app tiene ${bit.length}, ${av.length} y ${ga.length}.\n\nLa obra quedará exactamente como está en el Excel (las fotos se conservan).`;
+  if (faltan.length) msg += `\n\n⚠ Ojo: en la app hay registros que no están en el Excel (${faltan.join(", ")}). Si sigue, se pierden. Para no perderlos, primero descargue "Mi Excel al día", ábralo en el computador y súbalo de nuevo.`;
+  if (otraObra) msg += `\n\n⚠ El contrato del Excel (${x.obra.contrato}) no es el de esta obra (${o.contrato}).`;
+  if (!confirm(msg + "\n\n¿Actualizar la obra con este Excel?")) return null;
+  return aplicarControl(file, x, id);
 }
 
 // ------------------------------------------------------------------ exportar a Excel
