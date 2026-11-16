@@ -89,6 +89,7 @@ async function cargarObra(id) {
     db.uno("obras", id), db.deObra("items", id), db.deObra("avances", id),
     db.deObra("bitacora", id), db.deObra("fotos", id), db.deObra("personal", id)]);
   items.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  personal.sort((a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.creado || "").localeCompare(b.creado || ""));
   const ejec = {};
   for (const a of avances) ejec[a.itemId] = (ejec[a.itemId] || 0) + (Number(a.cantidad) || 0);
   let cd = 0, cdEj = 0;
@@ -860,7 +861,7 @@ async function vistaPersonal(id) {
   const form = h("form", { class: "form fila-add", onsubmit: async ev => {
       ev.preventDefault(); const fd = new FormData(form);
       if (!fd.get("nombre")) return;
-      await db.guardar("personal", { obraId: id, cargo: fd.get("cargo"), nombre: fd.get("nombre").trim() });
+      await db.guardar("personal", { obraId: id, cargo: fd.get("cargo"), nombre: fd.get("nombre").trim(), creado: new Date().toISOString() });
       vistaPersonal(id);
     } },
     h("input", { name: "nombre", placeholder: "Nombre", required: true }),
@@ -999,7 +1000,7 @@ async function leerControl(file) {
   }
   const personal = [];
   for (let r = 8; per && r < per.length; r++) {
-    const nom = txt(per[r][1]); if (nom) personal.push({ cargo: txt(per[r][0]), nombre: nom, cant: Number(per[r][2]) || 1 });
+    const nom = txt(per[r][1]); if (nom) personal.push({ cargo: txt(per[r][0]), nombre: nom, cant: Number(per[r][2]) || 1, orden: r });
   }
   const bitacora = [];
   for (let r = 8; bit && r < bit.length; r++) {
