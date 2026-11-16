@@ -56,6 +56,7 @@ const ICONOS = {
   nube: "M7 18a4.6 4.4 0 0 1 0-9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7H7M9.5 14.5l2 2 3.5-3.5",
   obra: "M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01",
   doc: "M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h6",
+  papelera: "M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
   lapiz: "M4 20h4L18.5 9.5a2.83 2.83 0 0 0-4-4L4 16v4M13.5 6.5l4 4",
 };
 function ico(n) { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -122,6 +123,9 @@ async function vistaInicio() {
     const d = await cargarObra(o.id);
     const ult = d.bitacora.map(b => b.fecha).sort().pop();
     tarjetas.push(h("a", { class: "tarjeta obra", href: `#/obra/${o.id}/resumen` },
+      h("button", { class: "quitar", "aria-label": "Borrar obra", onclick: async e => {
+        e.preventDefault(); e.stopPropagation();
+        if (await borrarObra(o.id, o.nombre)) vistaInicio(); } }, ico("papelera")),
       h("div", { class: "t-emp" }, o.empresa || ""),
       h("div", { class: "t-nom" }, o.nombre || "(sin nombre)"),
       h("div", { class: "t-sub" }, [o.municipio, o.contrato ? "Contrato " + o.contrato : ""].filter(Boolean).join(" · ")),
@@ -144,6 +148,13 @@ async function vistaInicio() {
       h("p", { class: "nota" }, "Mientras se activa la nube, los datos viven en este celular. Saque una copia cada semana y guárdela en su correo o en Archivos."),
       h("button", { class: "btn sec", onclick: copiaSeguridad }, "Descargar copia de seguridad"),
       h("label", { class: "btn sec" }, "Restaurar una copia", h("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: restaurarCopia }))));
+}
+
+async function borrarObra(id, nombre) {
+  const r = prompt(`Va a borrar la obra "${nombre || "sin nombre"}" con toda su bitácora, avances y fotos. No se puede deshacer.\n\nSi está seguro, escriba BORRAR`);
+  if ((r || "").trim().toUpperCase() !== "BORRAR") { if (r !== null) toast("No se borró: debe escribir BORRAR"); return false; }
+  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
+  await db.borrar("obras", id); toast("Obra borrada"); return true;
 }
 
 async function copiaSeguridad() {
@@ -484,9 +495,7 @@ async function vistaMas(id) {
     h("button", { class: "btn grande", onclick: () => exportarExcel(id) }, ico("bajar"), "Exportar a Excel"),
     h("p", { class: "nota" }, "El Excel trae las hojas BITÁCORA y ACTIVIDADES con las mismas columnas de su CONTROL DE OBRA: copie las filas y péguelas allá para sacar actas y memorias."),
     h("button", { class: "btn peligro", onclick: async () => {
-      if (prompt('Para borrar la obra completa escriba BORRAR') !== "BORRAR") return;
-      for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "documentos"]) for (const r of await db.deObra(s, id)) await db.borrar(s, r.id);
-      await db.borrar("obras", id); ir("#/"); } }, "Borrar esta obra"),
+      if (await borrarObra(id, d.obra.nombre)) ir("#/"); } }, "Borrar esta obra"),
     tabs(id, "mas"));
 }
 
