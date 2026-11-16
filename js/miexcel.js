@@ -9,8 +9,9 @@ const nombreHoja = n => sinTilde(n).replace(/^[\d.\-)\s]+/, "").trim();
 const letra = i => { let s = ""; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
 const numCol = L => L.split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
 
-// Cada hoja: texto para reconocer la fila de títulos y las columnas que llena la app (clave → inicio del título).
+// Cada bloque: hoja, texto de la columna A que marca la fila de títulos y las columnas que llena la app (clave → inicio del título).
 export const HOJAS = {
+  CONTRATOS: { hoja: "GASTOS", capacidad: 15, ancla: "N.º", cols: { tipo: "TIPO", objeto: "OBJETO", contratista: "CONTRATISTA", fechaLimite: "FECHA LIMITE", valor: "VALOR PACTADO" } },
   BITACORA: { capacidad: 400, ancla: "FECHA", cols: { fecha: "FECHA", jornada: "JORNADA", horas: "HORAS", clima: "CONDICION", precipitacion: "PRECIPITACION",
     afecto: "¿AFECTO", ausentes: "AUSENTES", charla: "CHARLA", epp: "USO DE EPP", incidentes: "INCIDENTES", ambiental: "MANEJO AMBIENTAL", novedades: "NOVEDADES" } },
   ACTIVIDADES: { capacidad: 1500, ancla: "FECHA", cols: { fecha: "FECHA", actividad: "ACTIVIDAD", cantidad: "CANTIDAD", frente: "DETALLE", equipo: "EQUIPO" } },
@@ -29,17 +30,19 @@ export async function llenarExcel(buf, datos) {
   const rels = await leer("xl/_rels/workbook.xml.rels");
   const NS = wbx.documentElement.namespaceURI;
   const hojasWb = [...wbx.getElementsByTagNameNS(NS, "sheet")];
-  const informe = [];
+  const informe = [], faltan = [];
 
   for (const [clave, conf] of Object.entries(HOJAS)) {
     const filas = datos[clave] || [];
-    const sh = hojasWb.find(s => nombreHoja(s.getAttribute("name")) === clave);
-    if (!sh) { informe.push(`${clave}: no está en el archivo`); continue; }
+    if (!filas.length && conf.hoja && !datos[clave]) continue;
+    const sh = hojasWb.find(s => nombreHoja(s.getAttribute("name")) === (conf.hoja || clave));
+    if (!sh) { informe.push(`${clave}: no está en el archivo`); faltan.push(clave); continue; }
     const nombre = sh.getAttribute("name");
     // fila de títulos y columnas (con SheetJS, que ya resuelve textos compartidos)
     const aoa = XLSX.utils.sheet_to_json(libro.Sheets[nombre], { header: 1, raw: true, defval: "" });
-    const hr = aoa.findIndex(f => sinTilde(f[0]) === conf.ancla);
-    if (hr < 0) { informe.push(`${clave}: no encontré los títulos`); continue; }
+    const ancla = sinTilde(conf.ancla).replace(/[º°]/g, "O").replace(/\s/g, "");
+    const hr = aoa.findIndex(f => sinTilde(f[0]).replace(/[º°]/g, "O").replace(/\s/g, "") === ancla && (clave !== "GASTOS" || sinTilde(f[1]).startsWith("TIPO")));
+    if (hr < 0) { informe.push(`${clave}: no encontré los títulos`); faltan.push(clave); continue; }
     const col = {};
     for (const [k, pref] of Object.entries(conf.cols)) {
       const i = aoa[hr].findIndex(t => sinTilde(t).startsWith(pref));
@@ -116,5 +119,5 @@ export async function llenarExcel(buf, datos) {
   const macros = !!zip.file("xl/vbaProject.bin");
   const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE",
     mimeType: macros ? "application/vnd.ms-excel.sheet.macroEnabled.12" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  return { blob, informe };
+  return { blob, informe, faltan };
 }

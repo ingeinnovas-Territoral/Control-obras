@@ -182,3 +182,19 @@ section.tarjeta h2{margin:0 0 10px}
 .doc-txt .t-sub{overflow-wrap:anywhere}
 .doc-acc{display:flex;gap:8px;align-items:center;flex:none}
 .quitar.mini{position:static;width:38px;height:38px}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch}
+.chip{flex:none;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:20px;padding:8px 14px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+.chip.ojo{border-color:#EF9F27}
+.chip.activa{background:var(--navy);border-color:var(--navy);color:#fff}
+button.item{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:transform .12s}
+button.item:active{transform:scale(.98)}
+.item.sin{border-style:dashed}
+.etq-sin{display:inline-block;font-size:11px;font-weight:700;color:var(--amber-ink);background:var(--amber-soft);padding:2px 8px;border-radius:10px;margin-bottom:5px}
+.utilidad .cifra{font-size:13px;padding:6px 0;color:inherit;text-decoration:none}
+a.cifra span{color:var(--navy)}
+.est{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:10px;white-space:nowrap}
+.est.bien{background:var(--green-soft);color:#2E5E12}.est.mal{background:var(--red-soft);color:var(--red)}
+.est.ojo{background:var(--amber-soft);color:var(--amber-ink)}.est.info{background:var(--navy-soft);color:var(--navy)}
+.tarjeta.contrato .t-pie b{color:var(--red)}
+.nuevo-contrato{border:1px dashed var(--green);border-radius:14px;padding:12px;background:var(--green-soft)}
+.nuevo-contrato[hidden]{display:none}

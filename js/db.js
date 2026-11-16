@@ -1,8 +1,8 @@
 // Almacenamiento local (IndexedDB). Todo se guarda primero en el celular; la cola "pendientes"
 // guarda lo que falta por subir cuando se conecte la sincronización en la nube.
 const DB_NAME = "control-obras";
-const DB_VER = 2;
-const STORES = ["obras", "items", "personal", "bitacora", "avances", "fotos", "gastos", "documentos", "pendientes"];
+const DB_VER = 3;
+const STORES = ["obras", "items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "documentos", "pendientes"];
 
 let _db = null;
 function abrir() {

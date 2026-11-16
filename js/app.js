@@ -156,7 +156,7 @@ async function vistaInicio() {
 async function borrarObra(id, nombre) {
   const r = prompt(`Va a borrar la obra "${nombre || "sin nombre"}" con toda su bitácora, avances y fotos. No se puede deshacer.\n\nSi está seguro, escriba BORRAR`);
   if ((r || "").trim().toUpperCase() !== "BORRAR") { if (r !== null) toast("No se borró: debe escribir BORRAR"); return false; }
-  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
+  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
   await db.borrar("obras", id); toast("Obra borrada"); return true;
 }
 
@@ -272,14 +272,20 @@ async function vistaResumen(id) {
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("plata"), "Registrar gasto"),
       h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?")),
-    top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0))) : null,
+    d.items.length ? h("a", { class: "tarjeta fila", href: `#/obra/${id}/avance`, onclick: () => { filtroItems = "sin"; } },
+      h("div", {}, h("div", { class: "t-nom" }, `${d.items.filter(i => !(d.ejec[i.id] > 0)).length} de ${d.items.length} ítems sin iniciar`), h("div", { class: "t-sub" }, "Ver los ítems que no llevan ejecución")),
+      ico("avance")) : null,
+    top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0, id))) : null,
     ultFotos.length ? h("section", {}, h("h2", {}, "Últimas fotos"), galeria(ultFotos, id)) : null,
     tabs(id, "resumen"));
 }
 const kpi = (lab, val, sub) => h("div", { class: "kpi" }, h("div", { class: "k-lab" }, lab), h("div", { class: "k-val" }, String(val)), h("div", { class: "k-sub" }, sub));
-function filaItem(it, ej) {
+function filaItem(it, ej, obraId) {
   const p = it.cantidad ? ej / it.cantidad : 0;
-  return h("div", { class: "item" + (p > 1.0001 ? " pasado" : "") },
+  const est = estadoItem(it, ej);
+  return h(obraId ? "button" : "div", { class: "item" + (p > 1.0001 ? " pasado" : "") + (est === "sin" ? " sin" : ""),
+      onclick: obraId ? () => { itemPre = it.id; ir(`#/obra/${obraId}/avance/nuevo`); } : null },
+    est === "sin" ? h("span", { class: "etq-sin" }, "Sin iniciar") : null,
     h("div", { class: "i-txt" }, h("b", {}, it.codigo || ""), " ", it.descripcion),
     h("div", { class: "prog" }, h("div", { style: `width:${Math.min(100, p * 100)}%` })),
     h("div", { class: "i-num" }, `${num(ej)} de ${num(it.cantidad)} ${it.und || ""} · ${pct(p)}`));
@@ -363,21 +369,36 @@ function filaAvance(a, d, id) {
     h("div", { class: "t-nom" }, it ? etiquetaItem(it) : "(ítem borrado del presupuesto)"),
     h("div", { class: "t-sub" }, `${fechaCorta(a.fecha)} · ${num(a.cantidad)} ${it?.und || ""}` + (a.frente ? " · " + a.frente : "")));
 }
+let filtroItems = "todos", itemPre = null;
+function estadoItem(it, ej) { const p = it.cantidad ? ej / it.cantidad : 0; return p <= 0 ? "sin" : p >= 0.9999 ? "fin" : "curso"; }
 async function vistaAvance(id) {
   const d = await cargarObra(id);
   const lista = d.avances.sort((a, b) => (b.fecha + b.creado).localeCompare(a.fecha + a.creado));
+  const cuenta = { todos: d.items.length, sin: 0, curso: 0, fin: 0 };
+  for (const it of d.items) cuenta[estadoItem(it, d.ejec[it.id] || 0)]++;
+  const caja = h("div", { class: "acciones" });
+  const chips = h("div", { class: "chips" });
+  const pintar = () => {
+    chips.innerHTML = ""; caja.innerHTML = "";
+    for (const [k, n] of [["todos", "Todos"], ["sin", "Sin iniciar"], ["curso", "En ejecución"], ["fin", "Terminados"]])
+      chips.append(h("button", { class: "chip" + (filtroItems === k ? " activa" : "") + (k === "sin" && cuenta.sin ? " ojo" : ""), onclick: () => { filtroItems = k; pintar(); } }, `${n} · ${cuenta[k]}`));
+    const its = d.items.filter(it => filtroItems === "todos" || estadoItem(it, d.ejec[it.id] || 0) === filtroItems);
+    if (!its.length) caja.append(h("div", { class: "vacio" }, "No hay ítems en este grupo."));
+    for (const it of its) caja.append(filaItem(it, d.ejec[it.id] || 0, id));
+  };
+  pintar();
   pantalla("Avance de obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     d.items.length ? h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance")
       : h("div", { class: "alerta" }, "Primero cargue el presupuesto en Más › Presupuesto."),
-    h("details", { class: "aparte" }, h("summary", {}, "Avance por ítem del presupuesto"),
-      ...d.items.map(it => filaItem(it, d.ejec[it.id] || 0))),
-    h("h2", {}, "Registros"),
-    lista.length ? lista.map(a => filaAvance(a, d, id)) : h("div", { class: "vacio" }, "Sin avances registrados."),
+    d.items.length ? h("section", {}, h("h2", {}, "Ítems del presupuesto"), chips, caja) : null,
+    h("details", { class: "aparte" }, h("summary", {}, `Registros de avance (${lista.length})`),
+      ...(lista.length ? lista.map(a => filaAvance(a, d, id)) : [h("div", { class: "nota" }, "Sin avances registrados.")])),
     tabs(id, "avance"));
 }
 async function vistaFormAvance(id, avId, fechaIni) {
   const d = await cargarObra(id);
-  const a = (avId && avId !== "nuevo") ? d.avances.find(x => x.id === avId) : { obraId: id, fecha: fechaIni || hoy(), creado: new Date().toISOString() };
+  const a = (avId && avId !== "nuevo") ? d.avances.find(x => x.id === avId) : { obraId: id, fecha: fechaIni || hoy(), itemId: itemPre || undefined, creado: new Date().toISOString() };
+  itemPre = null;
   if (!a) return ir(`#/obra/${id}/avance`);
   const info = h("div", { class: "nota" });
   const selItem = h("select", { name: "itemId", required: true, onchange: () => pintarInfo() },
@@ -499,6 +520,8 @@ async function vistaTablero(id) {
   const valorContrato = d.cd * d.factor, ejecutado = d.cdEj * d.factor;
   const gastado = gastos.reduce((t, g) => t + (Number(g.valor) || 0), 0);
   const utilidad = ejecutado - gastado;
+  const kc = await datosContratos(id);
+  const utilReal = utilidad - kc.porPagar;
   const avance = valorContrato ? ejecutado / valorContrato : 0;
   const norm = t => (t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   const porTipo = Object.fromEntries(TIPOS_GASTO.map(t => [t, 0]));
@@ -524,7 +547,12 @@ async function vistaTablero(id) {
       kpi("Tiempo", pct(d.tiempo), o.plazo ? `${Math.min(d.dias, o.plazo)} de ${o.plazo} días` : "Sin plazo"),
       kpi("Ejecutado", pesos(ejecutado), "con AIU"),
       kpi("Gastado", pesos(gastado), `${gastos.length} gasto(s)`)),
-    h("div", { class: "kpi utilidad " + (utilidad < 0 ? "neg" : "pos") }, h("div", { class: "k-lab" }, "Utilidad a la fecha (ejecutado − gastado)"), h("div", { class: "k-val" }, pesos(utilidad))),
+    h("div", { class: "kpi utilidad " + (utilReal < 0 ? "neg" : "pos") },
+      h("div", { class: "k-lab" }, "Utilidad real a la fecha"), h("div", { class: "k-val" }, pesos(utilReal)),
+      h("div", { class: "cifra" }, h("span", {}, "Ejecutado (con AIU)"), h("b", {}, pesos(ejecutado))),
+      h("div", { class: "cifra" }, h("span", {}, "(−) Gastado (ya pagado)"), h("b", {}, pesos(gastado))),
+      h("a", { class: "cifra", href: `#/obra/${id}/contratos` }, h("span", {}, `(−) Por pagar (saldos de ${kc.contratos.length} contrato(s)) ›`), h("b", {}, pesos(kc.porPagar))),
+      h("div", { class: "cifra" }, h("span", {}, "Margen sobre lo ejecutado"), h("b", {}, ejecutado ? pct(utilReal / ejecutado) : "—"))),
     h("section", { class: "tarjeta" }, h("h2", {}, "Tiempo vs avance"), curva(d, gastos, valorContrato)),
     h("section", { class: "tarjeta" }, h("h2", {}, "¿En qué se gastó?"), gastado ? barras(porTipo, gastado) : h("div", { class: "nota" }, "Sin gastos registrados.")),
     h("section", { class: "tarjeta" }, h("h2", {}, "¿Quién ha financiado la obra?"), gastado ? barras(porInv, gastado) : h("div", { class: "nota" }, "Sin gastos registrados.")),
@@ -562,20 +590,27 @@ function curva(d, gastos, valorContrato) {
 }
 
 // ------------------------------------------------------------------ OBRA: gastos
+let nombresContrato = new Map();
 function filaGasto(g, id) {
   return h("a", { class: "tarjeta gasto", href: `#/obra/${id}/gastos/${g.id}` },
     h("div", { class: "g-top" }, h("span", { class: "t-emp" }, g.tipo || "Gasto"), h("b", { class: "g-val" }, pesos(g.valor))),
     h("div", { class: "t-nom" }, g.detalle || "(sin detalle)"),
-    h("div", { class: "t-sub" }, [fechaCorta(g.fecha), g.proveedor, g.inversionista === "Otro" ? (g.otro || "Otro") : g.inversionista, g.soporte ? "con soporte" : ""].filter(Boolean).join(" · ")));
+    h("div", { class: "t-sub" }, [fechaCorta(g.fecha), g.proveedor, g.inversionista === "Otro" ? (g.otro || "Otro") : g.inversionista, g.contratoId && nombresContrato.get(g.contratoId) ? "abono a " + nombresContrato.get(g.contratoId) : "", g.soporte ? "con soporte" : ""].filter(Boolean).join(" · ")));
 }
 async function vistaGastos(id) {
   const d = await cargarObra(id);
   const gastos = (await db.deObra("gastos", id)).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.creado || "").localeCompare(a.creado || ""));
   const total = gastos.reduce((t, g) => t + (Number(g.valor) || 0), 0);
+  const k = await datosContratos(id);
+  nombresContrato = new Map(k.contratos.map(c => [c.id, `N.º ${c.numero} ${c.contratista}`]));
   const mes = hoy().slice(0, 7), delMes = gastos.filter(g => (g.fecha || "").startsWith(mes)).reduce((t, g) => t + (Number(g.valor) || 0), 0);
   pantalla("Gastos de la obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     h("div", { class: "kpis" }, kpi("Total gastado", pesos(total), `${gastos.length} gasto(s)`), kpi("Este mes", pesos(delMes), "")),
     h("button", { class: "btn grande verde", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("sumar"), "Registrar gasto"),
+    h("a", { class: "tarjeta fila", href: `#/obra/${id}/contratos` },
+      h("div", {}, h("div", { class: "t-nom" }, "Contratos y compromisos"),
+        h("div", { class: "t-sub" }, k.contratos.length ? `${k.contratos.length} contrato(s) · por pagar ${pesos(k.porPagar)}` : "Maestros, subcontratos, créditos…")),
+      ico("doc")),
     h("a", { class: "btn sec", href: `#/obra/${id}/tablero` }, ico("avance"), "Ver tablero · ¿cómo va la plata?"),
     gastos.length ? gastos.map(g => filaGasto(g, id)) : h("div", { class: "vacio" }, "Sin gastos registrados."),
     tabs(id, "gastos"));
@@ -585,6 +620,13 @@ async function vistaFormGasto(id, gId, fechaIni) {
   const g = gId !== "nuevo" ? await db.uno("gastos", gId) : { obraId: id, fecha: fechaIni || hoy(), tipo: "Materiales", inversionista: "", creado: new Date().toISOString() };
   if (!g) return ir(`#/obra/${id}/gastos`);
   let soporte = g.soporte || null;
+  if (contratoPre) { g.contratoId = contratoPre; contratoPre = null; }
+  const contratos = (await db.deObra("contratos", id)).sort((a, b) => a.numero - b.numero);
+  const nuevoC = h("div", { class: "nuevo-contrato", hidden: true }, h("p", { class: "nota" }, "Se crea el contrato con este abono. Llene sus datos:"), camposContrato({ tipo: "Mano de obra" }));
+  const selC = h("select", { name: "contratoId", onchange: () => { nuevoC.hidden = selC.value !== "+nuevo"; } },
+    h("option", { value: "" }, "— No es abono a un contrato —"),
+    contratos.map(c => h("option", { value: c.id, selected: g.contratoId === c.id }, `${c.numero} – ${c.contratista}`)),
+    h("option", { value: "+nuevo" }, "+ NUEVO CONTRATO"));
   const vistaSop = h("div", {});
   const pintarSop = () => { vistaSop.innerHTML = ""; if (soporte) vistaSop.append(h("img", { class: "foto-grande", src: URL.createObjectURL(soporte), alt: "Soporte" })); };
   const sel = (name, ops, val) => h("select", { name }, ops.map(x => h("option", { value: x, selected: val === x }, x || "— Sin asignar —")));
@@ -595,6 +637,15 @@ async function vistaFormGasto(id, gId, fechaIni) {
       g.valor = Number(String(fd.get("valor")).replace(/\D/g, "")) || 0;
       if (!g.valor) return alert("Escriba el valor del gasto.");
       for (const k of ["fecha", "tipo", "detalle", "proveedor", "factura", "item", "inversionista", "otro"]) g[k] = (fd.get(k) ?? "").trim();
+      const cSel = fd.get("contratoId");
+      if (cSel === "+nuevo") {
+        const c = leerContrato(fd, { obraId: id, creado: new Date().toISOString() });
+        if (!c.contratista) return alert("Para el nuevo contrato escriba el contratista o acreedor.");
+        if (!c.valor) return alert("Para el nuevo contrato escriba el valor pactado.");
+        try { c.numero = await nuevoNumeroContrato(id); } catch (e) { return alert(e.message); }
+        await db.guardar("contratos", c); g.contratoId = c.id;
+        if (!g.proveedor) g.proveedor = c.contratista;
+      } else if (cSel) g.contratoId = cSel; else delete g.contratoId;
       g.soporte = soporte || undefined;
       await db.guardar("gastos", g); toast("Gasto guardado"); history.back();
     } },
@@ -608,6 +659,8 @@ async function vistaFormGasto(id, gId, fechaIni) {
     h("div", { class: "fila2" },
       h("label", { class: "campo" }, h("span", {}, "Inversionista"), sel("inversionista", ["", ...INVERSIONISTAS], g.inversionista || "")),
       h("label", { class: "campo" }, h("span", {}, "Si es otro: ¿quién?"), h("input", { name: "otro", value: g.otro || "" }))),
+    h("label", { class: "campo" }, h("span", {}, "Abono a (contrato)"), selC),
+    nuevoC,
     h("label", { class: "campo" }, h("span", {}, "Ítem del presupuesto (opcional)"),
       h("select", { name: "item" }, h("option", { value: "" }, "— Ninguno —"), d.items.map(it => h("option", { selected: g.item === etiquetaItem(it) }, etiquetaItem(it))))),
     h("label", { class: "btn sec" }, ico("camara"), "Foto de la factura o soporte",
@@ -619,6 +672,94 @@ async function vistaFormGasto(id, gId, fechaIni) {
     gId !== "nuevo" ? h("button", { class: "btn peligro", onclick: async () => {
       if (!confirm("¿Borrar este gasto?")) return; await db.borrar("gastos", g.id); history.back(); } }, "Borrar gasto") : null);
 }
+
+// ------------------------------------------------------------------ OBRA: contratos y compromisos
+const TIPOS_CONTRATO = ["Mano de obra", "Subcontrato", "Crédito ferretería", "Alquiler de equipo", "Otro"];
+function estadoContrato(c, abonado) {
+  const saldo = (Number(c.valor) || 0) - abonado;
+  if (!Number(c.valor)) return ["Falta valor pactado", "ojo"];
+  if (abonado > c.valor + 0.5) return ["Sobrepago", "mal"];
+  if (saldo <= 0.5) return ["Pagado", "bien"];
+  if (c.fechaLimite && c.fechaLimite < hoy()) return ["Vencido", "mal"];
+  return ["Pendiente", "info"];
+}
+async function datosContratos(id) {
+  const [contratos, gastos] = await Promise.all([db.deObra("contratos", id), db.deObra("gastos", id)]);
+  contratos.sort((a, b) => a.numero - b.numero);
+  const ab = {}; for (const g of gastos) if (g.contratoId) ab[g.contratoId] = (ab[g.contratoId] || 0) + (Number(g.valor) || 0);
+  const filas = contratos.map(c => { const abonado = ab[c.id] || 0; return { c, abonado, saldo: (Number(c.valor) || 0) - abonado, estado: estadoContrato(c, abonado) }; });
+  const porPagar = filas.reduce((t, f) => t + Math.max(0, f.saldo), 0);
+  return { contratos, gastos, filas, porPagar, pactado: filas.reduce((t, f) => t + (Number(f.c.valor) || 0), 0), abonado: filas.reduce((t, f) => t + f.abonado, 0) };
+}
+function tarjetaContrato(f, id) {
+  const { c, abonado, saldo, estado } = f, p = c.valor ? Math.min(1, abonado / c.valor) : 0;
+  return h("a", { class: "tarjeta contrato", href: `#/obra/${id}/contratos/${c.id}` },
+    h("div", { class: "g-top" }, h("span", { class: "t-emp" }, `N.º ${c.numero} · ${c.tipo || "Contrato"}`), h("span", { class: "est " + estado[1] }, estado[0])),
+    h("div", { class: "t-nom" }, c.contratista), c.objeto ? h("div", { class: "t-sub" }, c.objeto) : null,
+    h("div", { class: "prog" }, h("div", { style: `width:${p * 100}%` })),
+    h("div", { class: "t-pie" }, h("span", {}, `Abonado ${pesos(abonado)} de ${pesos(c.valor)}`), h("b", {}, saldo > 0 ? "Debe " + pesos(saldo) : "")),
+    c.fechaLimite ? h("div", { class: "t-sub" }, "Fecha límite " + fechaCorta(c.fechaLimite)) : null);
+}
+async function vistaContratos(id) {
+  const d = await cargarObra(id); const k = await datosContratos(id);
+  pantalla("Contratos y compromisos", { atras: `#/obra/${id}/gastos`, subtitulo: d.obra.nombre },
+    h("p", { class: "nota" }, "Maestros, subcontratos, créditos de ferretería, alquileres… Los abonos se registran como gastos y se descuentan solos."),
+    h("div", { class: "kpis" }, kpi("Pactado", pesos(k.pactado), `${k.contratos.length} contrato(s)`), kpi("Por pagar", pesos(k.porPagar), "saldos pendientes")),
+    h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/contratos/nuevo`) }, ico("sumar"), "Nuevo contrato o compromiso"),
+    k.filas.length ? k.filas.map(f => tarjetaContrato(f, id)) : h("div", { class: "vacio" }, "Sin contratos registrados."),
+    tabs(id, "gastos"));
+}
+function camposContrato(c) {
+  const sel = h("select", { name: "c_tipo" }, TIPOS_CONTRATO.map(t => h("option", { selected: c.tipo === t }, t)));
+  const valor = campoPesos("c_valor", c.valor);
+  return h("div", { class: "form" },
+    h("div", { class: "fila2" }, h("label", { class: "campo" }, h("span", {}, "Tipo"), sel),
+      h("label", { class: "campo" }, h("span", {}, "Fecha límite"), h("input", { type: "date", name: "c_fecha", value: c.fechaLimite || "" }))),
+    h("label", { class: "campo" }, h("span", {}, "Contratista / acreedor"), h("input", { name: "c_contratista", value: c.contratista || "", placeholder: "Maestro Juan, Ferretería…" })),
+    h("label", { class: "campo" }, h("span", {}, "Objeto / concepto"), h("input", { name: "c_objeto", value: c.objeto || "", placeholder: "Mano de obra pintura, crédito materiales…" })),
+    h("label", { class: "campo" }, h("span", {}, "Valor pactado ($)"), valor));
+}
+function campoPesos(name, v) {
+  const inp = h("input", { name, inputmode: "numeric", value: v ? Math.round(v).toLocaleString("es-CO") : "",
+    oninput: () => { const n = inp.value.replace(/\D/g, ""); inp.value = n ? Number(n).toLocaleString("es-CO") : ""; } });
+  return inp;
+}
+function leerContrato(fd, c) {
+  c.tipo = fd.get("c_tipo") || "Otro"; c.fechaLimite = fd.get("c_fecha") || ""; c.contratista = (fd.get("c_contratista") || "").trim();
+  c.objeto = (fd.get("c_objeto") || "").trim(); c.valor = Number(String(fd.get("c_valor") || "").replace(/\D/g, "")) || 0;
+  return c;
+}
+async function nuevoNumeroContrato(id) {
+  const usados = new Set((await db.deObra("contratos", id)).map(c => c.numero));
+  for (let n = 1; n <= 15; n++) if (!usados.has(n)) return n;
+  throw new Error("Ya hay 15 contratos en esta obra (es el máximo del Excel).");
+}
+async function vistaFormContrato(id, cId) {
+  const d = await cargarObra(id);
+  const c = cId !== "nuevo" ? await db.uno("contratos", cId) : { obraId: id, tipo: "Mano de obra", creado: new Date().toISOString() };
+  if (!c) return ir(`#/obra/${id}/contratos`);
+  const k = await datosContratos(id); const f = k.filas.find(x => x.c.id === c.id);
+  const abonos = k.gastos.filter(g => g.contratoId && g.contratoId === c.id).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  nombresContrato = new Map(k.contratos.map(x => [x.id, `N.º ${x.numero} ${x.contratista}`]));
+  const form = h("form", { class: "form", onsubmit: async ev => {
+      ev.preventDefault(); leerContrato(new FormData(form), c);
+      if (!c.contratista) return alert("Escriba el contratista o acreedor.");
+      if (!c.valor && !confirm("No escribió el valor pactado. ¿Guardar así? (quedará marcado como pendiente de valor)")) return;
+      try { if (!c.numero) c.numero = await nuevoNumeroContrato(id); } catch (e) { return alert(e.message); }
+      await db.guardar("contratos", c); toast("Contrato guardado"); ir(`#/obra/${id}/contratos`);
+    } }, camposContrato(c), h("button", { class: "btn grande", type: "submit" }, "Guardar contrato"));
+  pantalla(cId === "nuevo" ? "Nuevo contrato" : `Contrato N.º ${c.numero}`, { atras: `#/obra/${id}/contratos`, subtitulo: d.obra.nombre },
+    f ? h("div", { class: "kpis" }, kpi("Abonado", pesos(f.abonado), `${abonos.length} abono(s)`), kpi("Saldo", pesos(Math.max(0, f.saldo)), f.estado[0])) : null,
+    form,
+    cId !== "nuevo" ? h("section", {}, h("h2", {}, "Abonos"),
+      abonos.length ? abonos.map(g => filaGasto(g, id)) : h("div", { class: "nota" }, "Sin abonos todavía."),
+      h("button", { class: "btn sec", onclick: () => { contratoPre = c.id; ir(`#/obra/${id}/gastos/nuevo`); } }, ico("plata"), "Registrar abono a este contrato")) : null,
+    cId !== "nuevo" ? h("button", { class: "btn peligro", onclick: async () => {
+      if (!confirm(abonos.length ? `Este contrato tiene ${abonos.length} abono(s). Si lo borra, esos gastos se conservan pero quedan sin contrato. ¿Borrar?` : "¿Borrar este contrato?")) return;
+      for (const g of abonos) { delete g.contratoId; await db.guardar("gastos", g); }
+      await db.borrar("contratos", c.id); ir(`#/obra/${id}/contratos`); } }, "Borrar contrato") : null);
+}
+let contratoPre = null;
 
 // ------------------------------------------------------------------ OBRA: mi Excel de control al día
 // Solo se guarda un Excel base por obra: el nuevo reemplaza al anterior.
@@ -662,6 +803,7 @@ async function descargarMiExcel(id) {
     const d = await cargarObra(id);
     const enOrden = (a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.creado || "").localeCompare(b.creado || "");
     const gastos = (await db.deObra("gastos", id)).sort(enOrden);
+    const contratos = await db.deObra("contratos", id);
     const serie = s => { if (!s) return ""; const [y, m, dd] = s.split("-").map(Number); return (Date.UTC(y, m - 1, dd) - Date.UTC(1899, 11, 30)) / 864e5; };
     const datos = {
       BITACORA: d.bitacora.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(b => ({ fecha: serie(b.fecha), jornada: b.jornada === "Normal" ? "" : b.jornada,
@@ -671,12 +813,15 @@ async function descargarMiExcel(id) {
         const it = d.items.find(i => i.id === a.itemId);
         return { fecha: serie(a.fecha), actividad: it ? etiquetaItem(it) : "", cantidad: Number(a.cantidad) || 0, frente: a.frente, equipo: a.equipo };
       }),
-      GASTOS: gastos.map(g => ({ fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: Number(g.valor) || 0,
-        item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: g.abonoA })),
+      GASTOS: gastos.map(g => { const c = contratos.find(k => k.id === g.contratoId);
+        return { fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: Number(g.valor) || 0,
+          item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: c ? `${c.numero} – ${c.contratista}` : "" }; }),
+      CONTRATOS: contratos.reduce((arr, c) => { arr[c.numero - 1] = { tipo: c.tipo, objeto: c.objeto, contratista: c.contratista, fechaLimite: serie(c.fechaLimite), valor: Number(c.valor) || "" }; return arr; }, []),
       PERSONAL: d.personal.map(p => ({ cargo: p.cargo, nombre: p.nombre, cant: Number(p.cant) || 1 })),
     };
-    const { blob, informe } = await llenarExcel(await pl.blob.arrayBuffer(), datos);
+    const { blob, informe, faltan } = await llenarExcel(await pl.blob.arrayBuffer(), datos);
     console.log("Mi Excel:", informe.join(" | "));
+    if (faltan.includes("CONTRATOS") && contratos.length) alert(`Ojo: su Excel base no tiene el bloque de CONTRATOS Y COMPROMISOS, así que los ${contratos.length} contrato(s) y sus abonos no quedan en el archivo (en la app sí). Use como base un Excel de la versión con contratos.`);
     const base = pl.nombre.replace(/\.(xlsm|xlsx)$/i, "").replace(/ \(al \d{2}-\d{2}-\d{4}\)$/, "");
     const ext = /\.xlsx$/i.test(pl.nombre) ? ".xlsx" : ".xlsm";
     await entregarArchivo(blob, `${base} (al ${fechaCorta(hoy()).replace(/\//g, "-")})${ext}`);
@@ -825,6 +970,7 @@ async function leerControl(file) {
   const ini = hoja("INICIO"), pres = hoja("PRESUPUESTO"), per = hoja("PERSONAL"), bit = hoja("BITACORA"), act = hoja("ACTIVIDADES"), gas = hoja("GASTOS");
   if (!ini || !pres) throw new Error("Este Excel no parece un CONTROL DE OBRA (no encontré las hojas INICIO y PRESUPUESTO).");
   const txt = v => String(v ?? "").trim();
+  const sinAcento = v => txt(v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
   const fechaIso = v => {
     if (typeof v === "number" && v > 20000) return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
     const m = txt(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : "";
@@ -868,6 +1014,14 @@ async function leerControl(file) {
     if (!fecha || !(cant > 0)) continue;
     actividades.push({ fecha, etiqueta: txt(f[1]), codigo: codigo(f[2]), cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), orden: r });
   }
+  const contratos = [];
+  if (gas) {
+    const hc = gas.findIndex(f => /^N\.?\s*[º°O]/i.test(txt(f[0])) && sinAcento(f[2]).startsWith("OBJETO"));
+    for (let r = hc + 1; hc >= 0 && r < gas.length && sinAcento(gas[r][0]) !== "TOTALES"; r++) {
+      const f = gas[r]; if (!txt(f[3])) continue;
+      contratos.push({ numero: r - hc, tipo: txt(f[1]), objeto: txt(f[2]), contratista: txt(f[3]), fechaLimite: fechaIso(f[4]), valor: Number(f[5]) || 0 });
+    }
+  }
   const gastos = [];
   if (gas) {
     const hr = gas.findIndex(f => txt(f[0]).toUpperCase() === "FECHA" && txt(f[1]).toUpperCase().startsWith("TIPO"));
@@ -879,7 +1033,7 @@ async function leerControl(file) {
     }
   }
   if (!items.length) throw new Error("No pude leer el presupuesto de este Excel. Ábralo en Excel, guárdelo y vuelva a intentarlo.");
-  return { buf, obra, items, personal, bitacora, actividades, gastos };
+  return { buf, obra, items, personal, bitacora, actividades, gastos, contratos };
 }
 
 // Guarda lo leído en una obra: nueva (obraId vacío) o existente (la actualiza con lo del Excel; conserva fotos).
@@ -917,11 +1071,19 @@ async function aplicarControl(file, x, obraId) {
   const viejosGa = obraId ? await db.deObra("gastos", id) : [];
   const llaveG = g => `${g.fecha}|${Math.round(g.valor)}|${(g.detalle || "").toLowerCase().trim()}`;
   const sop = new Map(viejosGa.filter(g => g.soporte).map(g => [llaveG(g), g.soporte]));
-  for (const g of x.gastos) { g.creado = ahora; const s = sop.get(llaveG(g)); if (s) g.soporte = s; }
+  const viejosCo = obraId ? await db.deObra("contratos", id) : [];
+  const idCo = new Map(viejosCo.map(c => [c.numero, c.id]));
+  for (const c of x.contratos) { const v = idCo.get(c.numero); if (v) c.id = v; c.creado = ahora; }
+  await db.reemplazarDeObra("contratos", id, x.contratos);
+  const porNum = new Map(x.contratos.map(c => [c.numero, c.id]));
+  for (const g of x.gastos) {
+    g.creado = ahora; const s = sop.get(llaveG(g)); if (s) g.soporte = s;
+    const n = parseInt(String(g.abonoA || "").trim(), 10); if (n && porNum.has(n)) g.contratoId = porNum.get(n);
+  }
   await db.reemplazarDeObra("gastos", id, x.gastos);
   await guardarPlantilla(id, file.name, new Blob([x.buf], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }));
   const resumen = `${obraId ? "Actualizado" : "Importado"}: ${x.items.length} ítems, ${x.personal.length} personas, ${x.bitacora.length} días de bitácora, ${avances.length} avances` +
-    (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
+    (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (x.contratos.length ? `, ${x.contratos.length} contratos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
   return { id, resumen };
 }
 
@@ -1013,6 +1175,7 @@ async function rutear() {
       if (v === "foto") return await vistaFoto(id, p[3]);
       if (v === "mas") return await vistaMas(id);
       if (v === "tablero") return await vistaTablero(id);
+      if (v === "contratos") return p[3] ? await vistaFormContrato(id, p[3]) : await vistaContratos(id);
       if (v === "gastos") return p[3] ? await vistaFormGasto(id, p[3], p[4]) : await vistaGastos(id);
       if (v === "presupuesto") return await vistaPresupuesto(id);
       if (v === "personal") return await vistaPersonal(id);
