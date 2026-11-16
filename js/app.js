@@ -621,6 +621,11 @@ async function vistaFormGasto(id, gId, fechaIni) {
 }
 
 // ------------------------------------------------------------------ OBRA: mi Excel de control al día
+// Solo se guarda un Excel base por obra: el nuevo reemplaza al anterior.
+async function guardarPlantilla(id, nombre, blob) {
+  for (const v of (await db.deObra("documentos", id)).filter(x => x.tipo === "excel-control")) await db.borrar("documentos", v.id);
+  await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre, blob, creado: new Date().toISOString() });
+}
 async function plantillaDe(id) {
   return (await db.deObra("documentos", id)).filter(x => x.tipo === "excel-control").sort((a, b) => (b.creado || "").localeCompare(a.creado || ""))[0];
 }
@@ -629,7 +634,7 @@ async function seccionMiExcel(id) {
   const elegir = h("label", { class: "btn " + (pl ? "sec" : "") }, ico("subir"), pl ? "Usar otro archivo de Excel" : "Elegir mi Excel de control",
     h("input", { type: "file", hidden: true, accept: ".xlsm,.xlsx", onchange: async e => {
       const f = e.target.files[0]; if (!f) return;
-      await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: f.name, blob: new Blob([await f.arrayBuffer()], { type: f.type }), creado: new Date().toISOString() });
+      await guardarPlantilla(id, f.name, new Blob([await f.arrayBuffer()], { type: f.type }));
       await descargarMiExcel(id);
     } }));
   const subir = h("label", { class: "btn verde" }, ico("subir"), "Cargar Excel actualizado del computador",
@@ -680,15 +685,22 @@ async function descargarMiExcel(id) {
 
 async function vistaMas(id) {
   const d = await cargarObra(id);
+  const docs = await db.deObra("documentos", id);
+  const base = await plantillaDe(id);
   pantalla("Más", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/tablero` }, h("div", { class: "t-nom" }, "Tablero · ¿cómo va la plata?"), h("div", { class: "t-sub" }, "Avance, gasto, utilidad e inversionistas")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/presupuesto` }, h("div", { class: "t-nom" }, "Presupuesto"), h("div", { class: "t-sub" }, d.items.length ? `${d.items.length} ítems · costo directo ${pesos(d.cd)}` : "Sin cargar")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/personal` }, h("div", { class: "t-nom" }, "Personal"), h("div", { class: "t-sub" }, `${d.personal.length} persona(s)`)),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/datos` }, h("div", { class: "t-nom" }, "Datos de la obra"), h("div", { class: "t-sub" }, [d.obra.contrato, d.obra.entidad].filter(Boolean).join(" · ") || "Contrato, entidad, plazo…")),
     h("section", {}, h("h2", {}, "Documentos"),
-      ...(await db.deObra("documentos", id)).map(doc => h("div", { class: "tarjeta fila" },
-        h("div", {}, h("div", { class: "t-nom" }, doc.tipo === "excel-control" ? "Excel de control (original importado)" : (doc.tipo || "Documento")), h("div", { class: "t-sub" }, doc.nombre)),
-        h("button", { class: "btn mini sec", onclick: () => entregarArchivo(doc.blob, doc.nombre) }, "Abrir"))),
+      ...docs.map((doc, k) => h("div", { class: "tarjeta fila doc" },
+        h("div", { class: "doc-txt" }, h("div", { class: "t-nom" }, doc.tipo === "excel-control" ? (doc.id === base?.id ? "Excel base de la obra" : "Excel de control (versión anterior)") : (doc.tipo || "Documento")), h("div", { class: "t-sub" }, doc.nombre)),
+        h("div", { class: "doc-acc" },
+          h("button", { class: "btn mini sec", onclick: () => entregarArchivo(doc.blob, doc.nombre) }, "Abrir"),
+          h("button", { class: "quitar mini", "aria-label": "Eliminar documento", onclick: async () => {
+            const aviso = doc.id === base?.id ? "\n\nEs el Excel base: sin él no podrá usar \"Descargar mi Excel al día\" hasta que elija otro." : "";
+            if (!confirm(`¿Eliminar "${doc.nombre}" de la app?${aviso}`)) return;
+            await db.borrar("documentos", doc.id); toast("Documento eliminado"); vistaMas(id); } }, ico("papelera"))))),
       h("a", { class: "btn sec", href: `#/obra/${id}/datos` }, "📄 Cargar contrato u orden de servicio")),
     await seccionMiExcel(id),
     h("button", { class: "btn sec", onclick: () => exportarExcel(id) }, ico("bajar"), "Exportar tablas sueltas (Excel simple)"),
@@ -866,6 +878,7 @@ async function leerControl(file) {
         valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]), orden: r });
     }
   }
+  if (!items.length) throw new Error("No pude leer el presupuesto de este Excel. Ábralo en Excel, guárdelo y vuelva a intentarlo.");
   return { buf, obra, items, personal, bitacora, actividades, gastos };
 }
 
@@ -906,7 +919,7 @@ async function aplicarControl(file, x, obraId) {
   const sop = new Map(viejosGa.filter(g => g.soporte).map(g => [llaveG(g), g.soporte]));
   for (const g of x.gastos) { g.creado = ahora; const s = sop.get(llaveG(g)); if (s) g.soporte = s; }
   await db.reemplazarDeObra("gastos", id, x.gastos);
-  await db.guardar("documentos", { obraId: id, tipo: "excel-control", nombre: file.name, blob: new Blob([x.buf], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }), creado: ahora });
+  await guardarPlantilla(id, file.name, new Blob([x.buf], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }));
   const resumen = `${obraId ? "Actualizado" : "Importado"}: ${x.items.length} ítems, ${x.personal.length} personas, ${x.bitacora.length} días de bitácora, ${avances.length} avances` +
     (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
   return { id, resumen };

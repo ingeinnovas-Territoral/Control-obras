@@ -101,7 +101,11 @@ export async function llenarExcel(buf, datos) {
     informe.push(`${nombre}: ${filas.length} fila(s)`);
   }
   // quitar los resultados guardados de las fórmulas: así Excel, Numbers o LibreOffice las recalculan al abrir
-  for (const path of Object.keys(zip.files).filter(n => /^xl\/worksheets\/[^/]+\.xml$/.test(n))) {
+  // (menos en las hojas que la app lee al importar: INICIO y PRESUPUESTO no cambian y necesitan sus valores)
+  const rutaDe = sh => { const rid = sh.getAttributeNS(NS_R, "id"); const t = [...rels.getElementsByTagName("Relationship")].find(r => r.getAttribute("Id") === rid)?.getAttribute("Target") || "";
+    return t.startsWith("/") ? t.slice(1) : "xl/" + t.replace(/^\.\//, ""); };
+  const conservar = new Set(hojasWb.filter(sh => ["INICIO", "PRESUPUESTO", "CARGAR PRESUPUESTO"].includes(nombreHoja(sh.getAttribute("name")))).map(rutaDe));
+  for (const path of Object.keys(zip.files).filter(n => /^xl\/worksheets\/[^/]+\.xml$/.test(n) && !conservar.has(n))) {
     const xml = await zip.file(path).async("string");
     const limpio = xml.replace(/(<c\b[^>]*>)(<f\b[^>]*\/>|<f\b[^>]*>[\s\S]*?<\/f>)<v>[\s\S]*?<\/v>/g, "$1$2");
     if (limpio !== xml) zip.file(path, limpio);

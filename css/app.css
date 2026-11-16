@@ -177,3 +177,8 @@ section.tarjeta h2{margin:0 0 10px}
 .g-val{font-size:17px;color:var(--navy);white-space:nowrap}
 @media (prefers-color-scheme: dark){.g-val{color:#E7ECF5}}
 .tarjeta.gasto .t-emp{margin-bottom:0}
+.tarjeta.doc{gap:10px}
+.doc-txt{min-width:0;flex:1}
+.doc-txt .t-sub{overflow-wrap:anywhere}
+.doc-acc{display:flex;gap:8px;align-items:center;flex:none}
+.quitar.mini{position:static;width:38px;height:38px}
