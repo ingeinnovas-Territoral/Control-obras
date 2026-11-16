@@ -168,7 +168,21 @@ export async function llenarExcel(buf, datos) {
 
   // ---- 4) escribir hojas y quitar resultados viejos de fórmulas para que todo se recalcule al abrir
   // (menos INICIO y CARGAR PRESUPUESTO, y PRESUPUESTO si no cambió: la app los lee al importar)
-  for (const [p, doc] of docs) zip.file(p, S.serializeToString(doc), { createFolders: false });
+  for (const [p, doc] of docs) {
+    // la "dimensión" de la hoja debe cubrir las celdas nuevas (otros programas leen solo ese rango)
+    let maxR = 1, maxC = 1;
+    for (const c of doc.getElementsByTagNameNS(NS, "c")) {
+      const m = /^([A-Z]+)(\d+)$/.exec(c.getAttribute("r") || ""); if (!m) continue;
+      maxR = Math.max(maxR, Number(m[2])); maxC = Math.max(maxC, numCol(m[1]));
+    }
+    const dim = doc.getElementsByTagNameNS(NS, "dimension")[0];
+    if (dim) {
+      const [ini, fin = ini] = (dim.getAttribute("ref") || "A1").split(":");
+      const mf = /^([A-Z]+)(\d+)$/.exec(fin) || [null, "A", "1"];
+      dim.setAttribute("ref", `${ini}:${letra(Math.max(maxC, numCol(mf[1])) - 1)}${Math.max(maxR, Number(mf[2]))}`);
+    }
+    zip.file(p, S.serializeToString(doc), { createFolders: false });
+  }
   const conservar = new Set(hojasWb.filter(sh => ["INICIO", "CARGAR PRESUPUESTO"].includes(nombreHoja(sh.getAttribute("name"))) ||
     (!presupuestoReescrito && nombreHoja(sh.getAttribute("name")) === "PRESUPUESTO")).map(rutaDe));
   for (const path of Object.keys(zip.files).filter(n => /^xl\/worksheets\/[^/]+\.xml$/.test(n) && !conservar.has(n))) {

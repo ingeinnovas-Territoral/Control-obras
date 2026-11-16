@@ -2,10 +2,11 @@
 import * as db from "./db.js";
 import { extraerTexto, extraerDatos } from "./contrato.js";
 import { llenarExcel, leerBase } from "./miexcel.js";
+import { informeGastosPDF } from "./informe.js";
 
 const EMPRESAS = {
-  "FLASSSERVIC S.A.S.": { nit: "900.740.386-7" },
-  "INGEINNOVA TERRITORIAL S.A.S.": { nit: "902.114.773-7" },
+  "FLASSSERVIC S.A.S.": { nit: "900.740.386-7", lema: "Construimos soluciones, transformamos territorios", logo: "icons/logo-flassservic.png" },
+  "INGEINNOVA TERRITORIAL S.A.S.": { nit: "902.114.773-7", lema: "Soluciones integrales para todos los territorios", logo: "icons/logo-ingeinnova.png" },
   "Otra": { nit: "" },
 };
 const CLIMA = ["Día soleado", "Parcialmente nublado", "Nublado", "Lluvia ligera", "Lluvia fuerte"];
@@ -568,7 +569,7 @@ async function vistaTablero(id) {
       ...[["Valor del contrato (del presupuesto)", pesos(valorContrato)], ["Ejecutado (con AIU)", pesos(ejecutado)], ["Gastado", pesos(gastado)],
           ["Días transcurridos", o.plazo ? Math.min(d.dias, o.plazo) : d.dias], ["% tiempo", pct(d.tiempo)], ["Días con registro en bitácora", d.bitacora.length]]
         .map(([a, b]) => h("div", { class: "cifra" }, h("span", {}, a), h("b", {}, String(b))))),
-    !gastos.length ? h("p", { class: "nota" }, "Los gastos se traen al importar su Excel de control. Pronto también se podrán registrar aquí.") : null,
+    h("button", { class: "btn sec", onclick: () => exportarInformeGastos(id) }, ico("doc"), "Exportar informe de gastos (PDF)"),
     tabs(id, "resumen"));
 }
 function curva(d, gastos, valorContrato) {
@@ -615,6 +616,7 @@ async function vistaGastos(id) {
   pantalla("Gastos de la obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     h("div", { class: "kpis" }, kpi("Total gastado", pesos(total), `${gastos.length} gasto(s)`), kpi("Este mes", pesos(delMes), "")),
     h("button", { class: "btn grande verde", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("sumar"), "Registrar gasto"),
+    h("button", { class: "btn sec", onclick: () => exportarInformeGastos(id) }, ico("doc"), "Exportar informe de gastos (PDF)"),
     h("a", { class: "tarjeta fila", href: `#/obra/${id}/contratos` },
       h("div", {}, h("div", { class: "t-nom" }, "Contratos y compromisos"),
         h("div", { class: "t-sub" }, k.contratos.length ? `${k.contratos.length} contrato(s) · por pagar ${pesos(k.porPagar)}` : "Maestros, subcontratos, créditos…")),
@@ -679,6 +681,28 @@ async function vistaFormGasto(id, gId, fechaIni) {
   pantalla(gId === "nuevo" ? "Registrar gasto" : "Editar gasto", { atras: `#/obra/${id}/gastos`, subtitulo: d.obra.nombre }, form,
     gId !== "nuevo" ? h("button", { class: "btn peligro", onclick: async () => {
       if (!confirm("¿Borrar este gasto?")) return; await db.borrar("gastos", g.id); history.back(); } }, "Borrar gasto") : null);
+}
+
+// Informe PDF de gastos y compromisos (igual al botón EXPORTAR GASTOS A PDF del Excel)
+async function exportarInformeGastos(id) {
+  try {
+    const d = await cargarObra(id); const o = d.obra;
+    const k = await datosContratos(id);
+    const enOrden = (a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.fecha || "").localeCompare(b.fecha || "") || (a.creado || "").localeCompare(b.creado || "");
+    const gastos = k.gastos.filter(g => Number(g.valor) || g.detalle || g.proveedor).sort(enOrden);
+    if (!gastos.length && !k.contratos.length) return alert("No hay gastos ni contratos registrados.");
+    toast("Armando el informe…");
+    const emp = EMPRESAS[o.empresa] || {};
+    let logo = null;
+    if (emp.logo) logo = await fetch(emp.logo).then(r => r.ok ? r.blob() : null).catch(() => null);
+    if (!logo) {   // obra de otra empresa: el logo que traiga su Excel
+      const pl = await plantillaDe(id);
+      if (pl) { try { const z = await JSZip.loadAsync(await pl.blob.arrayBuffer()); const f = Object.keys(z.files).find(n => /^xl\/media\/image\d+\.(png|jpe?g)$/i.test(n)); if (f) logo = await z.file(f).async("blob"); } catch (e) { console.warn(e); } }
+    }
+    const { blob, nombre } = await informeGastosPDF({ d, gastos, filasContratos: k.filas, porPagar: k.porPagar,
+      membrete: { empresa: o.empresa && o.empresa !== "Otra" ? o.empresa : "", nit: emp.nit ? "NIT " + emp.nit : "", lema: emp.lema || "", logo } });
+    await entregarArchivo(blob, nombre, [], true);
+  } catch (err) { console.error(err); alert("No pude armar el informe: " + err.message); }
 }
 
 // ------------------------------------------------------------------ OBRA: contratos y compromisos
@@ -1200,7 +1224,7 @@ async function exportarExcel(id) {
 }
 
 // En iPhone lo más confiable es la hoja de "Compartir" (correo, WhatsApp, Archivos…)
-async function entregarArchivo(blob, nombre, avisos = []) {
+async function entregarArchivo(blob, nombre, avisos = [], hojaSiempre = false) {
   const file = new File([blob], nombre, { type: blob.type });
   const compartir = async () => {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1211,7 +1235,7 @@ async function entregarArchivo(blob, nombre, avisos = []) {
     return true;
   };
   // Si el archivo tardó en armarse, el iPhone exige un toque nuevo para abrir "Compartir": se muestra una hoja con el botón.
-  if (!avisos.length && await compartir()) return;
+  if (!avisos.length && !hojaSiempre && await compartir()) return;
   const capa = h("div", { class: "hoja-capa", onclick: e => { if (e.target === capa) capa.remove(); } },
     h("div", { class: "hoja" },
       h("div", { class: "t-nom" }, "Archivo listo"), h("div", { class: "t-sub" }, nombre),
