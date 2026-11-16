@@ -107,6 +107,13 @@ async function vistaInicio() {
   pantalla("Control de Obras", { subtitulo: "Sus obras" },
     tarjetas.length ? tarjetas : h("div", { class: "vacio" }, "Todavía no hay obras. Cree la primera."),
     h("button", { class: "btn grande", onclick: () => ir("#/nueva") }, "+ Nueva obra"),
+    h("label", { class: "btn grande sec" }, "⇪ Importar obra desde mi Excel de control",
+      h("input", { type: "file", hidden: true, accept: ".xlsm,.xlsx,.xls", onchange: async e => {
+        const f = e.target.files[0]; if (!f) return;
+        toast("Leyendo el Excel…");
+        try { const r = await importarControl(f); toast(r.resumen); ir(`#/obra/${r.id}/resumen`); }
+        catch (err) { console.error(err); alert(err.message); }
+      } })),
     h("details", { class: "aparte" },
       h("summary", {}, "Copia de seguridad"),
       h("p", { class: "nota" }, "Mientras se activa la nube, los datos viven en este celular. Saque una copia cada semana y guárdela en su correo o en Archivos."),
@@ -555,6 +562,91 @@ function leerPresupuesto(filas) {
     items.push({ codigo: String(cod ?? "").trim(), descripcion: desc, und: String(f[cU] ?? "").trim(), cantidad: cant, vu });
   }
   return { items, total };
+}
+
+// ------------------------------------------------------------------ importar una obra desde el Excel CONTROL DE OBRA
+async function importarControl(file) {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const hoja = nombre => {
+    const n = wb.SheetNames.find(x => x.replace(/^[\d.\-)\s]+/, "").trim().toUpperCase() === nombre);
+    return n ? XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" }) : null;
+  };
+  const ini = hoja("INICIO"), pres = hoja("PRESUPUESTO"), per = hoja("PERSONAL"), bit = hoja("BITACORA"), act = hoja("ACTIVIDADES"), gas = hoja("GASTOS");
+  if (!ini || !pres) throw new Error("Este Excel no parece un CONTROL DE OBRA (no encontré las hojas INICIO y PRESUPUESTO).");
+  const txt = v => String(v ?? "").trim();
+  const fechaIso = v => {
+    if (typeof v === "number" && v > 20000) return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+    const m = txt(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : "";
+  };
+  const codigo = v => typeof v === "number" ? String(Math.round(v * 1000) / 1000) : txt(v);
+
+  // datos de la obra (por etiqueta, columna A → valor en B)
+  const lab = {};
+  for (const f of ini) if (txt(f[0])) lab[txt(f[0]).toLowerCase()] = f[1];
+  const busca = pref => { const k = Object.keys(lab).find(x => x.startsWith(pref)); return k ? lab[k] : ""; };
+  const emp = txt(busca("contratista")).toUpperCase();
+  const obra = {
+    nombre: txt(busca("objeto")) || file.name.replace(/\.[^.]+$/, ""),
+    contrato: txt(busca("contrato")), entidad: txt(busca("entidad")), municipio: txt(busca("municipio")), depto: txt(busca("departamento")),
+    inicio: fechaIso(busca("fecha de inicio")), plazo: Number(busca("plazo")) || 0,
+    empresa: emp.includes("INGEINNOVA") ? "INGEINNOVA TERRITORIAL S.A.S." : emp.includes("FLASS") ? "FLASSSERVIC S.A.S." : "Otra",
+    residente: txt(busca("firma 1 – nombre")), supervisor: txt(busca("firma 3 – nombre")),
+    creado: new Date().toISOString(), origen: file.name,
+  };
+  const vc = busca("valor del contrato"); if (typeof vc === "number") obra.totalPresupuesto = vc;
+  const aiu = busca("aiu %"); if (typeof aiu === "number" && !obra.totalPresupuesto) obra.aiu = Math.round(aiu * 10000) / 100;
+  await db.guardar("obras", obra);
+  const id = obra.id;
+
+  // presupuesto (hoja PRESUPUESTO: ítem, descripción, und, cantidad, valor unitario desde la fila 9)
+  const items = [];
+  for (let r = 8; r < pres.length; r++) {
+    const f = pres[r]; const desc = txt(f[1]), cant = Number(f[3]), vu = Number(f[4]);
+    if (desc && cant > 0 && vu > 0) items.push({ codigo: codigo(f[0]), descripcion: desc, und: txt(f[2]), cantidad: cant, vu, orden: items.length });
+  }
+  await db.reemplazarDeObra("items", id, items);
+  const porCodigo = new Map(items.map(i => [i.codigo, i.id]));
+  const porEtiqueta = new Map(items.map(i => [etiquetaItem(i).toLowerCase(), i.id]));
+
+  // personal
+  let nPer = 0;
+  for (let r = 8; per && r < per.length; r++) {
+    const nom = txt(per[r][1]); if (!nom) continue;
+    await db.guardar("personal", { obraId: id, cargo: txt(per[r][0]), nombre: nom }); nPer++;
+  }
+  // bitácora (una fila por día)
+  let nBit = 0;
+  for (let r = 8; bit && r < bit.length; r++) {
+    const f = bit[r]; const fecha = fechaIso(f[0]); if (!fecha) continue;
+    await db.guardar("bitacora", { obraId: id, fecha, jornada: txt(f[1]) || "Normal", horas: Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
+      afecto: txt(f[5]) || "No", ausentes: txt(f[6]) ? txt(f[6]).split(",").map(x => x.trim()).filter(Boolean) : [],
+      charla: txt(f[8]), epp: txt(f[9]), incidentes: txt(f[10]), ambiental: txt(f[11]), novedades: txt(f[12]) });
+    nBit++;
+  }
+  // actividades → avance
+  let nAct = 0, sinItem = 0;
+  for (let r = 8; act && r < act.length; r++) {
+    const f = act[r]; const fecha = fechaIso(f[0]); const cant = Number(f[3]);
+    if (!fecha || !(cant > 0)) continue;
+    const itemId = porEtiqueta.get(txt(f[1]).toLowerCase()) || porCodigo.get(codigo(f[2])) || porCodigo.get(txt(f[1]).split(" – ")[0]);
+    if (!itemId) { sinItem++; continue; }
+    await db.guardar("avances", { obraId: id, fecha, itemId, cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), creado: new Date().toISOString() });
+    nAct++;
+  }
+  // gastos (se guardan para la próxima etapa)
+  let nGas = 0;
+  if (gas) {
+    const hr = gas.findIndex(f => txt(f[0]).toUpperCase() === "FECHA" && txt(f[1]).toUpperCase().startsWith("TIPO"));
+    for (let r = hr + 1; hr >= 0 && r < gas.length; r++) {
+      const f = gas[r]; const valor = Number(f[5]);
+      if (!(valor > 0)) continue;
+      await db.guardar("gastos", { obraId: id, fecha: fechaIso(f[0]), tipo: txt(f[1]), detalle: txt(f[2]), proveedor: txt(f[3]), factura: txt(f[4]),
+        valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]) });
+      nGas++;
+    }
+  }
+  const resumen = `Importado: ${items.length} ítems, ${nPer} personas, ${nBit} días de bitácora, ${nAct} avances` + (nGas ? `, ${nGas} gastos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
+  return { id, resumen };
 }
 
 // ------------------------------------------------------------------ exportar a Excel
