@@ -645,7 +645,7 @@ async function seccionMiExcel(id) {
       : "Elija su archivo CONTROL DE OBRA y la app se lo devuelve con bitácora, actividades, gastos y personal al día."),
     h("div", { class: "acciones" },
       pl ? h("button", { class: "btn grande", onclick: () => descargarMiExcel(id) }, ico("excel"), "Descargar mi Excel al día") : null,
-      subir,
+      pl ? subir : null,
       pl ? null : elegir),
     pl ? h("p", { class: "nota" }, "¿Lo trabajó en el computador? Use \"Cargar mi Excel actualizado\" y la obra queda igual al archivo. Desde ese momento, \"Descargar\" parte de ese archivo.") : null,
     pl ? h("details", {}, h("summary", { class: "nota" }, "Otras opciones"), elegir) : null);
