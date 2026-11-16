@@ -26,7 +26,7 @@ function h(tag, attrs = {}, ...hijos) {
   for (const c of hijos.flat()) if (c !== null && c !== undefined && c !== false) el.append(c.nodeType ? c : document.createTextNode(c));
   return el;
 }
-const pesos = n => "$ " + Math.round(n || 0).toLocaleString("es-CO");
+const pesos = n => (n < 0 ? "-$ " : "$ ") + Math.abs(Math.round(n || 0)).toLocaleString("es-CO");
 const num = (n, d = 2) => (n || 0).toLocaleString("es-CO", { maximumFractionDigits: d });
 const pct = n => (isFinite(n) ? (n * 100).toLocaleString("es-CO", { maximumFractionDigits: 1 }) : "0") + " %";
 function hoy() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
@@ -57,6 +57,7 @@ const ICONOS = {
   obra: "M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01",
   doc: "M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h6",
   papelera: "M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
+  plata: "M17 8V5a1 1 0 0 0-1-1H6a2 2 0 0 0 0 4h12a1 1 0 0 1 1 1v3m0 4v3a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V6M20 12v4h-4a2 2 0 0 1 0-4h4",
   lapiz: "M4 20h4L18.5 9.5a2.83 2.83 0 0 0-4-4L4 16v4M13.5 6.5l4 4",
 };
 function ico(n) { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -266,7 +267,8 @@ async function vistaResumen(id) {
     h("div", { class: "mosaico" },
       h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, ico("bitacora"), "Bitácora de hoy"),
       h("button", { class: "tile verde", onclick: () => tomarFotos(id) }, ico("camara"), "Foto rápida"),
-      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance")),
+      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
+      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("plata"), "Tablero · ¿cómo va la plata?")),
     top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0))) : null,
     ultFotos.length ? h("section", {}, h("h2", {}, "Últimas fotos"), galeria(ultFotos, id)) : null,
     tabs(id, "resumen"));
@@ -481,9 +483,81 @@ async function comprimir(file, max = 1600, calidad = 0.72) {
 }
 
 // ------------------------------------------------------------------ OBRA: más (presupuesto, personal, exportar)
+// ------------------------------------------------------------------ OBRA: tablero (¿cómo va la plata?)
+const TIPOS_GASTO = ["Materiales", "Mano de obra", "Equipos", "Transporte", "Administración", "Otros"];
+const INVERSIONISTAS = ["Héctor Suárez", "Andrés Correa", "Otro"];
+async function vistaTablero(id) {
+  const d = await cargarObra(id); const o = d.obra;
+  const gastos = await db.deObra("gastos", id);
+  const valorContrato = d.cd * d.factor, ejecutado = d.cdEj * d.factor;
+  const gastado = gastos.reduce((t, g) => t + (Number(g.valor) || 0), 0);
+  const utilidad = ejecutado - gastado;
+  const avance = valorContrato ? ejecutado / valorContrato : 0;
+  const norm = t => (t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const porTipo = Object.fromEntries(TIPOS_GASTO.map(t => [t, 0]));
+  for (const g of gastos) { const t = TIPOS_GASTO.find(x => norm(x) === norm(g.tipo)) || "Otros"; porTipo[t] += Number(g.valor) || 0; }
+  const porInv = { "Héctor Suárez": 0, "Andrés Correa": 0, "Otros": 0, "Sin asignar": 0 };
+  for (const g of gastos) {
+    const i = norm(g.inversionista), v = Number(g.valor) || 0;
+    if (i.startsWith("hector")) porInv["Héctor Suárez"] += v; else if (i.startsWith("andres")) porInv["Andrés Correa"] += v;
+    else if (i) porInv["Otros"] += v; else porInv["Sin asignar"] += v;
+  }
+  let estado, clase;
+  if (!ejecutado) { estado = "Registre avances para ver el estado de la obra"; clase = "info"; }
+  else if (gastado > ejecutado) { estado = "La obra está perdiendo plata: se ha gastado más de lo ejecutado"; clase = "mal"; }
+  else if (avance < d.tiempo - 0.1) { estado = "La obra va atrasada: el avance va por debajo del tiempo"; clase = "ojo"; }
+  else { estado = "La obra va bien: avance al día y gasto por debajo de lo ejecutado"; clase = "bien"; }
+  const barras = (obj, total) => h("div", { class: "barras" }, Object.entries(obj).filter(([, v]) => v > 0 || total === 0).map(([k, v]) =>
+    h("div", { class: "barra-f" }, h("div", { class: "bf-top" }, h("span", {}, k), h("b", {}, pesos(v)), h("span", { class: "bf-pct" }, total ? pct(v / total) : "")),
+      h("div", { class: "prog" }, h("div", { style: `width:${total ? Math.min(100, v / total * 100) : 0}%` })))));
+  pantalla("¿Cómo va la plata?", { atras: `#/obra/${id}/resumen`, subtitulo: o.nombre },
+    h("div", { class: "estado " + clase }, ico(clase === "bien" ? "nube" : "alerta"), estado),
+    h("div", { class: "kpis" },
+      kpi("Avance de obra", pct(avance), "de " + pesos(valorContrato)),
+      kpi("Tiempo", pct(d.tiempo), o.plazo ? `${Math.min(d.dias, o.plazo)} de ${o.plazo} días` : "Sin plazo"),
+      kpi("Ejecutado", pesos(ejecutado), "con AIU"),
+      kpi("Gastado", pesos(gastado), `${gastos.length} gasto(s)`)),
+    h("div", { class: "kpi utilidad " + (utilidad < 0 ? "neg" : "pos") }, h("div", { class: "k-lab" }, "Utilidad a la fecha (ejecutado − gastado)"), h("div", { class: "k-val" }, pesos(utilidad))),
+    h("section", { class: "tarjeta" }, h("h2", {}, "Tiempo vs avance"), curva(d, gastos, valorContrato)),
+    h("section", { class: "tarjeta" }, h("h2", {}, "¿En qué se gastó?"), gastado ? barras(porTipo, gastado) : h("div", { class: "nota" }, "Sin gastos registrados.")),
+    h("section", { class: "tarjeta" }, h("h2", {}, "¿Quién ha financiado la obra?"), gastado ? barras(porInv, gastado) : h("div", { class: "nota" }, "Sin gastos registrados.")),
+    h("section", { class: "tarjeta" }, h("h2", {}, "Cifras de la obra"),
+      ...[["Valor del contrato (del presupuesto)", pesos(valorContrato)], ["Ejecutado (con AIU)", pesos(ejecutado)], ["Gastado", pesos(gastado)],
+          ["Días transcurridos", o.plazo ? Math.min(d.dias, o.plazo) : d.dias], ["% tiempo", pct(d.tiempo)], ["Días con registro en bitácora", d.bitacora.length]]
+        .map(([a, b]) => h("div", { class: "cifra" }, h("span", {}, a), h("b", {}, String(b))))),
+    !gastos.length ? h("p", { class: "nota" }, "Los gastos se traen al importar su Excel de control. Pronto también se podrán registrar aquí.") : null,
+    tabs(id, "resumen"));
+}
+function curva(d, gastos, valorContrato) {
+  const o = d.obra, dia = s => { const [y, m, dd] = s.split("-").map(Number); return Date.UTC(y, m - 1, dd) / 864e5; };
+  const fechas = [...d.avances.map(a => a.fecha), ...gastos.map(g => g.fecha)].filter(Boolean).sort();
+  const ini = o.inicio ? dia(o.inicio) : (fechas.length ? dia(fechas[0]) : null);
+  if (ini === null) return h("div", { class: "nota" }, "Ponga la fecha de inicio y el plazo en Datos de la obra para ver la curva.");
+  const hoyD = dia(hoy()), fin = o.plazo ? ini + Number(o.plazo) - 1 : Math.max(hoyD, fechas.length ? dia(fechas.at(-1)) : hoyD);
+  const vu = Object.fromEntries(d.items.map(i => [i.id, i.vu]));
+  const ej = d.avances.map(a => [dia(a.fecha), (Number(a.cantidad) || 0) * (vu[a.itemId] || 0) * d.factor]);
+  const ga = gastos.filter(g => g.fecha).map(g => [dia(g.fecha), Number(g.valor) || 0]);
+  const acum = (lst, t) => lst.reduce((s, [f, v]) => s + (f <= t ? v : 0), 0);
+  const W = 320, H = 170, L = 6, R = 6, T = 10, B = 22, n = Math.max(1, fin - ini);
+  const ymax = Math.max(valorContrato, acum(ga, Infinity), acum(ej, Infinity), 1);
+  const X = t => L + (t - ini) / n * (W - L - R), Y = v => T + (1 - v / ymax) * (H - T - B);
+  const linea = (fn, hasta) => { const pts = []; for (let t = ini; t <= Math.min(fin, hasta); t++) pts.push(`${X(t).toFixed(1)},${Y(fn(t)).toFixed(1)}`); return pts.join(" "); };
+  const prog = t => valorContrato * Math.min(1, (t - ini + 1) / (n + 1));
+  const fmt = t => { const x = new Date(t * 864e5); return `${String(x.getUTCDate()).padStart(2, "0")}/${String(x.getUTCMonth() + 1).padStart(2, "0")}`; };
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Curva programado contra ejecutado y gastado">
+    <line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" class="eje"/>
+    ${o.plazo ? `<polyline points="${linea(prog, fin)}" fill="none" class="l-prog"/>` : ""}
+    <polyline points="${linea(t => acum(ga, t), hoyD)}" fill="none" class="l-gas"/>
+    <polyline points="${linea(t => acum(ej, t), hoyD)}" fill="none" class="l-ej"/>
+    <text x="${L}" y="${H - 6}" class="ej-t">${fmt(ini)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" class="ej-t">${fmt(fin)}</text></svg>`;
+  return h("div", {}, h("div", { html: svg }),
+    h("div", { class: "leyenda" }, o.plazo ? h("span", { class: "lg lg-prog" }, "Programado") : null, h("span", { class: "lg lg-ej" }, "Ejecutado"), h("span", { class: "lg lg-gas" }, "Gastado")));
+}
+
 async function vistaMas(id) {
   const d = await cargarObra(id);
   pantalla("Más", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
+    h("a", { class: "tarjeta menu", href: `#/obra/${id}/tablero` }, h("div", { class: "t-nom" }, "Tablero · ¿cómo va la plata?"), h("div", { class: "t-sub" }, "Avance, gasto, utilidad e inversionistas")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/presupuesto` }, h("div", { class: "t-nom" }, "Presupuesto"), h("div", { class: "t-sub" }, d.items.length ? `${d.items.length} ítems · costo directo ${pesos(d.cd)}` : "Sin cargar")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/personal` }, h("div", { class: "t-nom" }, "Personal"), h("div", { class: "t-sub" }, `${d.personal.length} persona(s)`)),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/datos` }, h("div", { class: "t-nom" }, "Datos de la obra"), h("div", { class: "t-sub" }, [d.obra.contrato, d.obra.entidad].filter(Boolean).join(" · ") || "Contrato, entidad, plazo…")),
@@ -747,6 +821,7 @@ async function rutear() {
       if (v === "fotos") return await vistaFotos(id);
       if (v === "foto") return await vistaFoto(id, p[3]);
       if (v === "mas") return await vistaMas(id);
+      if (v === "tablero") return await vistaTablero(id);
       if (v === "presupuesto") return await vistaPresupuesto(id);
       if (v === "personal") return await vistaPersonal(id);
       if (v === "datos") return await vistaDatosObra(id);

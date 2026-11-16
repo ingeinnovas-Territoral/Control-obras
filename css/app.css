@@ -141,3 +141,34 @@ details .btn{width:100%}
 .tarjeta.obra{position:relative;padding-right:56px}
 .quitar{position:absolute;top:10px;right:10px;width:40px;height:40px;border-radius:12px;border:0;background:var(--red-soft);color:var(--red);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .12s}
 .quitar:active{transform:scale(.9)}
+.estado{border-radius:16px;padding:14px 16px;font-weight:600;display:flex;gap:10px;align-items:center}
+.estado .ic{width:24px;height:24px}
+.estado.bien{background:var(--green-soft);color:#2E5E12}
+.estado.ojo{background:var(--amber-soft);color:var(--amber-ink)}
+.estado.mal{background:var(--red-soft);color:var(--red)}
+.estado.info{background:var(--navy-soft);color:var(--navy)}
+@media (prefers-color-scheme: dark){.estado.bien{color:#BFE39A}.estado.info{color:#C9D8F2}}
+.kpi .k-val{overflow-wrap:anywhere}
+.kpis .k-val{font-size:19px}
+.utilidad .k-val{font-size:26px}
+.utilidad.pos .k-val{color:#3B6D11 !important}
+.utilidad.neg .k-val{color:var(--red) !important}
+.utilidad.neg{background:var(--red-soft);border-color:transparent}
+section.tarjeta h2{margin:0 0 10px}
+.barras{display:flex;flex-direction:column;gap:12px}
+.bf-top{display:flex;gap:8px;align-items:baseline;font-size:14px}
+.bf-top span:first-child{flex:1}
+.bf-pct{color:var(--muted);font-size:12px;min-width:48px;text-align:right}
+.barra-f .prog{margin-top:6px}
+.cifra{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.cifra:last-child{border-bottom:0}
+.cifra span{color:var(--muted)}
+.eje{stroke:var(--line);stroke-width:1}
+.l-prog{stroke:#9CA3AF;stroke-width:2;stroke-dasharray:5 4}
+.l-ej{stroke:var(--green);stroke-width:3;stroke-linejoin:round}
+.l-gas{stroke:#E24B4A;stroke-width:2.5;stroke-linejoin:round}
+.ej-t{fill:var(--muted);font-size:11px}
+.leyenda{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px;flex-wrap:wrap}
+.lg::before{content:"";display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.lg-prog::before{background:#9CA3AF}.lg-ej::before{background:var(--green)}.lg-gas::before{background:#E24B4A}
+.cifra b{white-space:nowrap}
