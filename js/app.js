@@ -41,6 +41,30 @@ function toast(msg) {
   document.body.append(t); setTimeout(() => t.classList.add("ver"), 10);
   setTimeout(() => { t.classList.remove("ver"); setTimeout(() => t.remove(), 300); }, 2600);
 }
+const ICONOS = {
+  home: "M5 12H3l9-9 9 9h-2M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7M9 21v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6",
+  bitacora: "M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM9 4v16M13 8h2M13 12h2",
+  avance: "M3 17l6-6 4 4 8-8M14 7h7v7",
+  camara: "M5 7h1a2 2 0 0 0 2-2a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1a2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2M9 13a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+  mas: "M4 6h16M4 12h16M4 18h16",
+  sumar: "M12 5v14M5 12h14",
+  subir: "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 9l5-5 5 5M12 4v12",
+  bajar: "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5 5-5M12 4v12",
+  atras: "M15 6l-6 6 6 6",
+  pin: "M9 11a3 3 0 1 0 6 0a3 3 0 0 0-6 0M17.66 16.66L13.41 20.9a2 2 0 0 1-2.83 0l-4.24-4.24a8 8 0 1 1 11.32 0z",
+  alerta: "M12 9v4M12 16h.01M10.24 3.96L2.65 17a2 2 0 0 0 1.73 3h15.24a2 2 0 0 0 1.73-3L13.76 3.96a2 2 0 0 0-3.52 0z",
+  nube: "M7 18a4.6 4.4 0 0 1 0-9a5 4.5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7H7M9.5 14.5l2 2 3.5-3.5",
+  obra: "M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01",
+  doc: "M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h6",
+  lapiz: "M4 20h4L18.5 9.5a2.83 2.83 0 0 0-4-4L4 16v4M13.5 6.5l4 4",
+};
+function ico(n) { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "ic"); s.setAttribute("aria-hidden", "true");
+  s.innerHTML = `<path d="${ICONOS[n]}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`; return s; }
+function anillo(p) {
+  const C = 2 * Math.PI * 34, v = Math.max(0, Math.min(1, p)) * C;
+  return h("span", { html: `<svg width="84" height="84" viewBox="0 0 80 80"><circle class="pista" cx="40" cy="40" r="34" fill="none" stroke-width="8"/><circle class="valor" cx="40" cy="40" r="34" fill="none" stroke-width="8" stroke-linecap="round" stroke-dasharray="${v.toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 40 40)"/><text class="pct" x="40" y="45" text-anchor="middle" font-size="15">${(p * 100).toLocaleString("es-CO", { maximumFractionDigits: 1 })}%</text></svg>` });
+}
 function etiquetaItem(it) { return (it.codigo ? it.codigo + " – " : "") + it.descripcion; }
 function ir(hash) { location.hash = hash; }
 
@@ -72,11 +96,11 @@ async function cargarObra(id) {
 }
 
 // ------------------------------------------------------------------ marco de pantalla
-function pantalla(titulo, { atras, subtitulo, acciones } = {}, ...cuerpo) {
+function pantalla(titulo, { atras, subtitulo, acciones, alta } = {}, ...cuerpo) {
   const app = $("#app"); app.innerHTML = "";
   app.append(
-    h("header", { class: "barra" },
-      atras ? h("button", { class: "atras", onclick: () => ir(atras), "aria-label": "Atrás" }, "‹") : h("span", { class: "marca" }, "▣"),
+    h("header", { class: "barra" + (alta ? " alta" : "") },
+      atras ? h("button", { class: "atras", onclick: () => ir(atras), "aria-label": "Atrás" }, ico("atras")) : h("span", { class: "marca" }, ico("obra")),
       h("div", { class: "titulos" }, h("h1", {}, titulo), subtitulo ? h("div", { class: "sub" }, subtitulo) : null),
       acciones || null),
     h("div", { id: "sync", class: "sync" }),
@@ -85,9 +109,9 @@ function pantalla(titulo, { atras, subtitulo, acciones } = {}, ...cuerpo) {
   window.scrollTo(0, 0);
 }
 function tabs(obraId, activa) {
-  const t = [["resumen", "Resumen", "◉"], ["bitacora", "Bitácora", "✎"], ["avance", "Avance", "▲"], ["fotos", "Fotos", "◫"], ["mas", "Más", "≡"]];
+  const t = [["resumen", "Resumen", "home"], ["bitacora", "Bitácora", "bitacora"], ["avance", "Avance", "avance"], ["fotos", "Fotos", "camara"], ["mas", "Más", "mas"]];
   return h("nav", { class: "tabs" }, t.map(([k, n, i]) =>
-    h("a", { href: `#/obra/${obraId}/${k}`, class: k === activa ? "activa" : "" }, h("span", { class: "ico" }, i), n)));
+    h("a", { href: `#/obra/${obraId}/${k}`, class: k === activa ? "activa" : "" }, ico(i), n)));
 }
 
 // ------------------------------------------------------------------ INICIO: lista de obras
@@ -106,14 +130,15 @@ async function vistaInicio() {
   }
   pantalla("Control de Obras", { subtitulo: "Sus obras" },
     tarjetas.length ? tarjetas : h("div", { class: "vacio" }, "Todavía no hay obras. Cree la primera."),
-    h("button", { class: "btn grande", onclick: () => ir("#/nueva") }, "+ Nueva obra"),
-    h("label", { class: "btn grande sec" }, "⇪ Importar obra desde mi Excel de control",
+    h("div", { class: "mosaico" },
+    h("button", { class: "tile", onclick: () => ir("#/nueva") }, ico("sumar"), "Nueva obra"),
+    h("label", { class: "tile verde" }, ico("subir"), "Importar desde mi Excel",
       h("input", { type: "file", hidden: true, accept: ".xlsm,.xlsx,.xls", onchange: async e => {
         const f = e.target.files[0]; if (!f) return;
         toast("Leyendo el Excel…");
         try { const r = await importarControl(f); toast(r.resumen); ir(`#/obra/${r.id}/resumen`); }
         catch (err) { console.error(err); alert(err.message); }
-      } })),
+      } }))),
     h("details", { class: "aparte" },
       h("summary", {}, "Copia de seguridad"),
       h("p", { class: "nota" }, "Mientras se activa la nube, los datos viven en este celular. Saque una copia cada semana y guárdela en su correo o en Archivos."),
@@ -216,17 +241,21 @@ async function vistaResumen(id) {
   const d = await cargarObra(id); const o = d.obra;
   const ultFotos = d.fotos.sort((a, b) => (b.creado || "").localeCompare(a.creado || "")).slice(0, 6);
   const top = d.items.filter(i => d.ejec[i.id]).slice(0, 8);
-  pantalla(o.nombre, { atras: "#/", subtitulo: [o.empresa, o.municipio].filter(Boolean).join(" · ") },
+  const sub = h("span", {}, ico("pin"), [o.empresa, o.municipio].filter(Boolean).join(" · "));
+  pantalla(o.nombre, { atras: "#/", subtitulo: sub, alta: true },
+    h("div", { class: "anillo" }, anillo(d.avance),
+      h("div", { class: "anillo-txt" }, d.cd ? [h("span", {}, "Ejecutado"), h("b", {}, pesos(d.cdEj * d.factor)), h("span", {}, "de " + pesos(d.cd * d.factor))]
+        : [h("span", {}, "Avance de obra"), h("b", {}, o.valor ? pesos(o.valor) : "—"), h("span", {}, "Cargue el presupuesto en Más")])),
     h("div", { class: "kpis" },
-      kpi("Avance de obra", pct(d.avance), d.cd ? pesos(d.cdEj * d.factor) + " de " + pesos(d.cd * d.factor) : (o.valor ? "Contrato " + pesos(o.valor) + " · cargue el presupuesto" : "Cargue el presupuesto")),
-      kpi("Tiempo", pct(d.tiempo), o.plazo ? `${Math.min(d.dias, o.plazo)} de ${o.plazo} días` : "Sin plazo"),
-      kpi("Bitácora", d.bitacora.length, "días registrados"),
-      kpi("Fotos", d.fotos.length, "en la obra")),
-    d.cd && d.avance < d.tiempo - 0.1 ? h("div", { class: "alerta" }, "⚠ El avance va por debajo del tiempo") : null,
-    h("div", { class: "acciones" },
-      h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, "✎ Registrar el día de hoy"),
-      h("button", { class: "btn grande sec", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, "▲ Registrar avance"),
-      h("button", { class: "btn grande sec", onclick: () => tomarFotos(id) }, "◫ Tomar fotos")),
+      kpi("Tiempo", o.plazo ? `Día ${Math.min(d.dias, o.plazo)}/${o.plazo}` : "—", o.plazo ? pct(d.tiempo) + " del plazo" : "Sin plazo"),
+      kpi("Bitácora", d.bitacora.length + (d.bitacora.length === 1 ? " día" : " días"), "registrados"),
+      kpi("Fotos", d.fotos.length, "en la obra"),
+      kpi("Personal", d.personal.length, "en la cuadrilla")),
+    d.cd && d.avance < d.tiempo - 0.1 ? h("div", { class: "alerta ambar" }, ico("alerta"), `Va ${Math.round((d.tiempo - d.avance) * 100)} puntos atrás del tiempo`) : null,
+    h("div", { class: "mosaico" },
+      h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, ico("bitacora"), "Bitácora de hoy"),
+      h("button", { class: "tile verde", onclick: () => tomarFotos(id) }, ico("camara"), "Foto rápida"),
+      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance")),
     top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0))) : null,
     ultFotos.length ? h("section", {}, h("h2", {}, "Últimas fotos"), galeria(ultFotos, id)) : null,
     tabs(id, "resumen"));
@@ -245,7 +274,7 @@ async function vistaBitacora(id) {
   const d = await cargarObra(id);
   const dias = d.bitacora.sort((a, b) => b.fecha.localeCompare(a.fecha));
   pantalla("Bitácora", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
-    h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, "✎ Registrar el día de hoy"),
+    h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, ico("lapiz"), "Registrar el día de hoy"),
     h("label", { class: "campo inline" }, h("span", {}, "Otro día:"),
       h("input", { type: "date", onchange: e => e.target.value && ir(`#/obra/${id}/bitacora/${e.target.value}`) })),
     dias.length ? dias.map(b => {
@@ -301,7 +330,7 @@ async function vistaDia(id, fecha) {
       h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/avance/nuevo/${fecha}`) }, "+ Registrar avance de este día")),
     h("section", {}, h("h2", {}, "Fotos de este día"),
       foDia.length ? galeria(foDia, id) : h("div", { class: "nota" }, "Sin fotos este día."),
-      h("button", { class: "btn sec", onclick: () => tomarFotos(id, { fecha }) }, "◫ Tomar fotos de este día")),
+      h("button", { class: "btn sec", onclick: () => tomarFotos(id, { fecha }) }, ico("camara"), "Tomar fotos de este día")),
     d.bitacora.find(x => x.fecha === fecha) ? h("button", { class: "btn peligro", onclick: async () => {
       if (!confirm("¿Borrar la bitácora de este día? (no borra el avance ni las fotos)")) return;
       await db.borrar("bitacora", b.id); ir(`#/obra/${id}/bitacora`); } }, "Borrar este día") : null);
@@ -318,7 +347,7 @@ async function vistaAvance(id) {
   const d = await cargarObra(id);
   const lista = d.avances.sort((a, b) => (b.fecha + b.creado).localeCompare(a.fecha + a.creado));
   pantalla("Avance de obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
-    d.items.length ? h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, "▲ Registrar avance")
+    d.items.length ? h("button", { class: "btn grande", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance")
       : h("div", { class: "alerta" }, "Primero cargue el presupuesto en Más › Presupuesto."),
     h("details", { class: "aparte" }, h("summary", {}, "Avance por ítem del presupuesto"),
       ...d.items.map(it => filaItem(it, d.ejec[it.id] || 0))),
@@ -378,7 +407,7 @@ async function vistaFotos(id) {
   const porDia = {};
   for (const f of d.fotos.sort((a, b) => (b.creado || "").localeCompare(a.creado || ""))) (porDia[f.fecha] ||= []).push(f);
   pantalla("Registro fotográfico", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
-    h("button", { class: "btn grande", onclick: () => tomarFotos(id) }, "◫ Tomar fotos"),
+    h("button", { class: "btn grande verde", onclick: () => tomarFotos(id) }, ico("camara"), "Tomar fotos"),
     Object.keys(porDia).length ? Object.keys(porDia).sort().reverse().map(f => h("section", {}, h("h2", {}, fechaLarga(f)), galeria(porDia[f], id)))
       : h("div", { class: "vacio" }, "Sin fotos todavía."),
     tabs(id, "fotos"));
@@ -452,7 +481,7 @@ async function vistaMas(id) {
         h("div", {}, h("div", { class: "t-nom" }, doc.tipo || "Documento"), h("div", { class: "t-sub" }, doc.nombre)),
         h("button", { class: "btn mini sec", onclick: () => entregarArchivo(doc.blob, doc.nombre) }, "Abrir"))),
       h("a", { class: "btn sec", href: `#/obra/${id}/datos` }, "📄 Cargar contrato u orden de servicio")),
-    h("button", { class: "btn grande", onclick: () => exportarExcel(id) }, "Exportar a Excel"),
+    h("button", { class: "btn grande", onclick: () => exportarExcel(id) }, ico("bajar"), "Exportar a Excel"),
     h("p", { class: "nota" }, "El Excel trae las hojas BITÁCORA y ACTIVIDADES con las mismas columnas de su CONTROL DE OBRA: copie las filas y péguelas allá para sacar actas y memorias."),
     h("button", { class: "btn peligro", onclick: async () => {
       if (prompt('Para borrar la obra completa escriba BORRAR') !== "BORRAR") return;
