@@ -198,3 +198,8 @@ a.cifra span{color:var(--navy)}
 .tarjeta.contrato .t-pie b{color:var(--red)}
 .nuevo-contrato{border:1px dashed var(--green);border-radius:14px;padding:12px;background:var(--green-soft)}
 .nuevo-contrato[hidden]{display:none}
+.hoja-capa{position:fixed;inset:0;z-index:30;background:rgba(14,21,36,.45);display:flex;align-items:flex-end;justify-content:center;animation:entra .2s var(--ease)}
+.hoja{background:var(--card);width:100%;max-width:560px;border-radius:22px 22px 0 0;padding:20px 16px calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}
+.hoja .t-sub{overflow-wrap:anywhere}
+.avisos{font-weight:500;font-size:13.5px;display:block}
+.avisos p{margin:4px 0}

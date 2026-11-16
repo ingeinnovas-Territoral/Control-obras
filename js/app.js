@@ -1,7 +1,7 @@
 // Control de Obras — app de campo (funciona sin internet).
 import * as db from "./db.js";
 import { extraerTexto, extraerDatos } from "./contrato.js";
-import { llenarExcel } from "./miexcel.js";
+import { llenarExcel, leerBase } from "./miexcel.js";
 
 const EMPRESAS = {
   "FLASSSERVIC S.A.S.": { nit: "900.740.386-7" },
@@ -18,7 +18,8 @@ function h(tag, attrs = {}, ...hijos) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v === null || v === undefined || v === false) continue;
-    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    if (k === "onchange" && attrs.type === "file") el.addEventListener("change", async e => { try { await v(e); } finally { e.target.value = ""; } });   // permite volver a elegir el mismo archivo
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "class") el.className = v;
     else if (k === "html") el.innerHTML = v;
     else if (k === "value") el.value = v;
@@ -184,7 +185,9 @@ async function vistaDatosObra(id) {
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault();
       const fd = new FormData(form);
+      const nombreAntes = o.nombre;
       for (const [k, v] of fd.entries()) o[k] = v;
+      if (o.nombre !== nombreAntes) delete o.nombreAuto;
       o.plazo = Number(o.plazo) || 0; o.aiu = o.aiu === "" ? "" : Number(o.aiu);
       o.valor = o.valor === "" ? "" : Number(String(o.valor).replace(/[^\d]/g, "")) || "";
       o.anticipoPct = o.anticipoPct === "" ? "" : Number(o.anticipoPct);
@@ -315,7 +318,9 @@ async function vistaDia(id, fecha) {
   const b = d.bitacora.find(x => x.fecha === fecha) || { obraId: id, fecha, clima: CLIMA[0], precipitacion: PRECIP[0], afecto: "No",
     jornada: "Normal", horas: 9, epp: "Cumple", incidentes: "Ninguno", ausentes: [] };
   const ausentes = new Set(b.ausentes || []);
-  const sel = (name, ops) => h("select", { name }, ops.map(x => h("option", { selected: b[name] === x }, x)));
+  // si el valor guardado no está en la lista (o está vacío, como viene a veces del Excel) se conserva tal cual
+  const sel = (name, ops) => { const v = b[name] ?? ""; const lista = ops.includes(v) ? ops : [v, ...ops];
+    return h("select", { name }, lista.map(x => h("option", { value: x, selected: v === x }, x === "" ? "— Sin dato —" : x))); };
   const area = (lab, name, ph) => h("label", { class: "campo" }, h("span", {}, lab), h("textarea", { name, rows: 3, placeholder: ph || "" }, b[name] || ""));
   const avDia = d.avances.filter(a => a.fecha === fecha);
   const foDia = d.fotos.filter(f => f.fecha === fecha);
@@ -325,7 +330,9 @@ async function vistaDia(id, fecha) {
       const fd = new FormData(form);
       for (const k of ["clima", "precipitacion", "afecto", "jornada", "horas", "charla", "epp", "incidentes", "ambiental", "novedades"]) b[k] = fd.get(k) ?? "";
       b.horas = String(b.horas).trim() === "" ? "" : Number(b.horas) || 0;
-      b.ausentes = [...form.querySelectorAll("input[name=presente]")].filter(c => !c.checked).map(c => c.value);
+      const nombres = new Set(d.personal.map(p => p.nombre));
+      b.ausentes = [...form.querySelectorAll("input[name=presente]")].filter(c => !c.checked).map(c => c.value)
+        .concat((b.ausentes || []).filter(n => !nombres.has(n)));   // ausentes escritos en el Excel que no están en el personal se conservan
       await db.guardar("bitacora", b);
       toast("Día guardado"); ir(`#/obra/${id}/bitacora`);
     } },
@@ -367,7 +374,7 @@ async function vistaDia(id, fecha) {
 function filaAvance(a, d, id) {
   const it = d.items.find(i => i.id === a.itemId);
   return h("a", { class: "tarjeta av", href: `#/obra/${id}/avance/${a.id}` },
-    h("div", { class: "t-nom" }, it ? etiquetaItem(it) : "(ítem borrado del presupuesto)"),
+    h("div", { class: "t-nom" }, it ? etiquetaItem(it) : (a.etiquetaExcel ? a.etiquetaExcel + " (no está en el presupuesto)" : "(ítem borrado del presupuesto)")),
     h("div", { class: "t-sub" }, `${fechaCorta(a.fecha)} · ${num(a.cantidad)} ${it?.und || ""}` + (a.frente ? " · " + a.frente : "")));
 }
 let filtroItems = "todos", itemPre = null;
@@ -801,31 +808,61 @@ async function descargarMiExcel(id) {
   const pl = await plantillaDe(id); if (!pl) return;
   toast("Armando su Excel…");
   try {
-    const d = await cargarObra(id);
-    const enOrden = (a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.creado || "").localeCompare(b.creado || "");
+    const d = await cargarObra(id); const o = d.obra;
+    const buf = await pl.blob.arrayBuffer();
+    const base = leerBase(buf);
+    const enOrden = (a, b) => (a.orden ?? 1e9) - (b.orden ?? 1e9) || (a.fecha || "").localeCompare(b.fecha || "") || (a.creado || "").localeCompare(b.creado || "");
     const gastos = (await db.deObra("gastos", id)).sort(enOrden);
     const contratos = await db.deObra("contratos", id);
     const serie = s => { if (!s) return ""; const [y, m, dd] = s.split("-").map(Number); return (Date.UTC(y, m - 1, dd) - Date.UTC(1899, 11, 30)) / 864e5; };
+    const avisos = [];
+
+    // ¿el presupuesto de la app es el mismo del Excel?
+    const llave = it => `${String(it.codigo).trim()}|${String(it.descripcion).trim().toUpperCase()}|${Math.round(it.cantidad * 1000)}|${Math.round(it.vu * 100)}`;
+    const igual = base.items.length === d.items.length && base.items.every((b, k) => llave(b) === llave(d.items[k]));
+    const reescribir = d.items.length > 0 && !igual;
+    const etqBase = new Map(base.items.map(b => [llave(b), b.etiqueta]));
+    const etiqueta = it => reescribir ? (it.codigo ? it.codigo + " – " : "") + it.descripcion.trim() : (etqBase.get(llave(it)) || etiquetaItem(it));
+    const validas = new Set(reescribir ? d.items.map(etiqueta) : base.items.map(b => b.etiqueta));
+
+    const actividades = d.avances.sort(enOrden).map(a => {
+      const it = d.items.find(i => i.id === a.itemId);
+      return { fecha: serie(a.fecha), actividad: it ? etiqueta(it) : (a.etiquetaExcel || ""), cantidad: Number(a.cantidad) || 0, frente: a.frente, equipo: a.equipo };
+    });
+    const fuera = actividades.filter(a => a.actividad && !validas.has(a.actividad)).length;
+    if (fuera) avisos.push(`${fuera} actividad(es) no coinciden con un ítem del presupuesto del Excel; allá saldrán como "¡No está en el presupuesto!".`);
+    const gItems = gastos.filter(g => g.item && !validas.has(g.item)).length;
+    if (gItems) avisos.push(`${gItems} gasto(s) tienen un ítem que ya no está en el presupuesto.`);
+
     const datos = {
-      BITACORA: d.bitacora.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(b => ({ fecha: serie(b.fecha), jornada: b.jornada === "Normal" ? "" : b.jornada,
+      BITACORA: d.bitacora.slice().sort(enOrden).map(b => ({ fecha: serie(b.fecha), jornada: b.jornada === "Normal" ? "" : b.jornada,
         horas: b.horas === "" || b.horas == null ? "" : Number(b.horas), clima: b.clima, precipitacion: b.precipitacion, afecto: b.afecto, ausentes: (b.ausentes || []).join(", "),
         charla: b.charla, epp: b.epp, incidentes: b.incidentes, ambiental: b.ambiental, novedades: b.novedades })),
-      ACTIVIDADES: d.avances.sort(enOrden).map(a => {
-        const it = d.items.find(i => i.id === a.itemId);
-        return { fecha: serie(a.fecha), actividad: it ? etiquetaItem(it) : "", cantidad: Number(a.cantidad) || 0, frente: a.frente, equipo: a.equipo };
-      }),
+      ACTIVIDADES: actividades,
       GASTOS: gastos.map(g => { const c = contratos.find(k => k.id === g.contratoId);
-        return { fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: Number(g.valor) || 0,
-          item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: c ? `${c.numero} – ${c.contratista}` : "" }; }),
+        return { fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: g.valor === "" || g.valor == null ? "" : Number(g.valor) || 0,
+          item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: c ? `${c.numero} – ${c.contratista}` : (g.contratoId ? "" : g.abonoA || "") }; }),
       CONTRATOS: contratos.reduce((arr, c) => { arr[c.numero - 1] = { tipo: c.tipo, objeto: c.objeto, contratista: c.contratista, fechaLimite: serie(c.fechaLimite), valor: Number(c.valor) || "" }; return arr; }, []),
       PERSONAL: d.personal.map(p => ({ cargo: p.cargo, nombre: p.nombre, cant: Number(p.cant) || 1 })),
+      INICIO: { nombre: o.nombreAuto ? "" : o.nombre, contrato: o.contrato, entidad: o.entidad, municipio: o.municipio, depto: o.depto,
+        inicio: serie(o.inicio), plazo: Number(o.plazo) || "", empresa: o.empresa && o.empresa !== "Otra" ? o.empresa : "", residente: o.residente, supervisor: o.supervisor },
     };
-    const { blob, informe, faltan } = await llenarExcel(await pl.blob.arrayBuffer(), datos);
-    console.log("Mi Excel:", informe.join(" | "));
-    if (faltan.includes("CONTRATOS") && contratos.length) alert(`Ojo: su Excel base no tiene el bloque de CONTRATOS Y COMPROMISOS, así que los ${contratos.length} contrato(s) y sus abonos no quedan en el archivo (en la app sí). Use como base un Excel de la versión con contratos.`);
-    const base = pl.nombre.replace(/\.(xlsm|xlsx)$/i, "").replace(/ \(al \d{2}-\d{2}-\d{4}\)$/, "");
+    if (reescribir) {
+      datos.CARGAR = d.items.map(it => ({ codigo: String(it.codigo ?? ""), descripcion: it.descripcion, und: it.und || "", cantidad: it.cantidad, vu: it.vu, total: Math.round(it.cantidad * it.vu * 100) / 100 }));
+      if (o.totalPresupuesto && base.aiuManual == null) datos.CARGAR.push({ codigo: "", descripcion: "VALOR TOTAL", und: "", cantidad: "", vu: "", total: o.totalPresupuesto });
+      avisos.push(`El presupuesto de la app es distinto al del Excel: se escribió en CARGAR PRESUPUESTO (${d.items.length} ítems).`);
+    }
+    if (base.aiuManual != null && d.cd && Math.abs(1 + base.aiuManual - d.factor) > 0.0005)
+      avisos.push(`El AIU del Excel (${pct(base.aiuManual)}) no es el mismo que usa la app (${pct(d.factor - 1)}). Revise el panel AIU en CARGAR PRESUPUESTO.`);
+    if (contratos.length && !base.tieneContratos)
+      avisos.push(`Su Excel base no tiene el bloque de CONTRATOS Y COMPROMISOS: los ${contratos.length} contrato(s) y sus abonos no quedan en el archivo (en la app sí). Use como base la versión del Excel con contratos.`);
+
+    const r = await llenarExcel(buf, datos);
+    console.log("Mi Excel:", r.informe.join(" | "));
+    avisos.push(...r.avisos);
+    const nombreBase = pl.nombre.replace(/\.(xlsm|xlsx)$/i, "").replace(/ \(al \d{2}-\d{2}-\d{4}\)$/, "");
     const ext = /\.xlsx$/i.test(pl.nombre) ? ".xlsx" : ".xlsm";
-    await entregarArchivo(blob, `${base} (al ${fechaCorta(hoy()).replace(/\//g, "-")})${ext}`);
+    await entregarArchivo(r.blob, `${nombreBase} (al ${fechaCorta(hoy()).replace(/\//g, "-")})${ext}`, avisos);
   } catch (err) { console.error(err); alert("No pude armar el Excel: " + err.message); }
 }
 
@@ -910,6 +947,12 @@ async function aplicarPresupuesto(id, d, r) {
   const viejos = new Map(d.items.map(i => [(i.codigo + "|" + i.descripcion).toLowerCase(), i.id]));
   r.items.forEach((it, k) => { it.orden = k; const v = viejos.get((it.codigo + "|" + it.descripcion).toLowerCase()); if (v) it.id = v; });
   await db.reemplazarDeObra("items", id, r.items);
+  // avances de ítems que ya no están: se conservan con su nombre (no se pierden al exportar)
+  const nuevos = new Set(r.items.map(i => i.id));
+  for (const a of d.avances) if (a.itemId && !nuevos.has(a.itemId)) {
+    const it = d.items.find(i => i.id === a.itemId);
+    a.etiquetaExcel = it ? etiquetaItem(it) : a.etiquetaExcel; a.itemId = null; await db.guardar("avances", a);
+  }
   d.obra.totalPresupuesto = r.total || 0;
   await db.guardar("obras", d.obra);
   toast(`${r.items.length} ítems cargados`);
@@ -931,10 +974,10 @@ function leerPresupuesto(filas) {
   let hr = -1, cI = 0, cD = 1, cU = 2, cC = 3, cV = 4;
   for (let r = 0; r < Math.min(filas.length, 60); r++) {
     const f = filas[r].map(norm);
-    if (f.some(x => x.includes("descrip") || x.includes("actividad")) && f.some(x => x.startsWith("cant"))) {
+    if (f.some(x => x.includes("descrip") || x.includes("actividad") || x === "detalle") && f.some(x => x.startsWith("cant"))) {
       hr = r;
       const busca = (pred, def) => { const k = f.findIndex(pred); return k >= 0 ? k : def; };
-      cD = busca(x => x.includes("descrip") || x.includes("actividad") || x.includes("concepto"), 1);
+      cD = busca(x => x.includes("descrip") || x.includes("actividad") || x.includes("concepto") || x === "detalle", 1);
       cC = busca(x => x.startsWith("cant"), 3);
       cU = busca(x => /^(und|unid|un\.?|u\.?)$/.test(x) || x.startsWith("unid") || x.startsWith("und"), 2);
       cV = busca(x => x.includes("unit") || x.includes("v/u") || x.includes("v.u") || x.includes("precio"), 4);
@@ -1005,14 +1048,14 @@ async function leerControl(file) {
   const bitacora = [];
   for (let r = 8; bit && r < bit.length; r++) {
     const f = bit[r]; const fecha = fechaIso(f[0]); if (!fecha) continue;
-    bitacora.push({ fecha, jornada: txt(f[1]) || "Normal", horas: txt(f[2]) === "" ? "" : Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
+    bitacora.push({ orden: r, fecha, jornada: txt(f[1]) || "Normal", horas: txt(f[2]) === "" ? "" : Number(f[2]) || 0, clima: txt(f[3]), precipitacion: txt(f[4]),
       afecto: txt(f[5]) || "No", ausentes: txt(f[6]) ? txt(f[6]).split(",").map(x => x.trim()).filter(Boolean) : [],
       charla: txt(f[8]), epp: txt(f[9]), incidentes: txt(f[10]), ambiental: txt(f[11]), novedades: txt(f[12]) });
   }
   const actividades = [];
   for (let r = 8; act && r < act.length; r++) {
-    const f = act[r]; const fecha = fechaIso(f[0]); const cant = Number(f[3]);
-    if (!fecha || !(cant > 0)) continue;
+    const f = act[r]; const fecha = fechaIso(f[0]); const cant = Number(f[3]) || 0;
+    if (!fecha && !txt(f[1]) && !cant) continue;
     actividades.push({ fecha, etiqueta: txt(f[1]), codigo: codigo(f[2]), cantidad: cant, frente: txt(f[6]), equipo: txt(f[7]), orden: r });
   }
   const contratos = [];
@@ -1027,11 +1070,15 @@ async function leerControl(file) {
   if (gas) {
     const hr = gas.findIndex(f => txt(f[0]).toUpperCase() === "FECHA" && txt(f[1]).toUpperCase().startsWith("TIPO"));
     for (let r = hr + 1; hr >= 0 && r < gas.length; r++) {
-      const f = gas[r]; const valor = Number(f[5]);
-      if (!(valor > 0)) continue;
+      const f = gas[r]; const valor = Number(f[5]) || 0;
+      if (!valor && ![0, 1, 2, 3, 4, 6, 7, 8, 9].some(i => txt(f[i]))) continue;
       gastos.push({ fecha: fechaIso(f[0]), tipo: txt(f[1]), detalle: txt(f[2]), proveedor: txt(f[3]), factura: txt(f[4]),
         valor, item: txt(f[6]), inversionista: txt(f[7]), otro: txt(f[8]), abonoA: txt(f[9]), orden: r });
     }
+  }
+  if (!items.length) {   // el PRESUPUESTO no trae resultados guardados: se lee la tabla pegada en CARGAR PRESUPUESTO
+    const car = hoja("CARGAR PRESUPUESTO");
+    if (car) leerPresupuesto(car.slice(7)).items.forEach((it, k) => items.push({ ...it, orden: k }));
   }
   if (!items.length) throw new Error("No pude leer el presupuesto de este Excel. Ábralo en Excel, guárdelo y vuelva a intentarlo.");
   return { buf, obra, items, personal, bitacora, actividades, gastos, contratos };
@@ -1044,9 +1091,11 @@ async function aplicarControl(file, x, obraId) {
   if (obraId) {
     obra = await db.uno("obras", obraId);
     for (const [k, v] of Object.entries(x.obra)) if (v !== "" && v !== 0 && v != null) obra[k] = v;
+    if (x.obra.nombre) delete obra.nombreAuto;
     await db.guardar("obras", obra);
   } else {
-    obra = { ...x.obra, nombre: x.obra.nombre || file.name.replace(/\.[^.]+$/, ""), empresa: x.obra.empresa || "Otra", creado: ahora, origen: file.name };
+    obra = { ...x.obra, nombre: x.obra.nombre || file.name.replace(/\.[^.]+$/, "").replace(/ \(al \d{2}-\d{2}-\d{4}\)$/, ""), nombreAuto: !x.obra.nombre || undefined,
+      empresa: x.obra.empresa || "Otra", creado: ahora, origen: file.name };
     await db.guardar("obras", obra);
   }
   const id = obra.id;
@@ -1064,8 +1113,8 @@ async function aplicarControl(file, x, obraId) {
   const avances = [];
   for (const a of x.actividades) {
     const itemId = porEtiqueta.get(a.etiqueta.toLowerCase()) || porCodigo.get(a.codigo) || porCodigo.get(a.etiqueta.split(" – ")[0]);
-    if (!itemId) { sinItem++; continue; }
-    avances.push({ fecha: a.fecha, itemId, cantidad: a.cantidad, frente: a.frente, equipo: a.equipo, orden: a.orden, creado: ahora });
+    if (!itemId) sinItem++;
+    avances.push({ fecha: a.fecha, itemId: itemId || null, etiquetaExcel: itemId ? undefined : a.etiqueta, cantidad: a.cantidad, frente: a.frente, equipo: a.equipo, orden: a.orden, creado: ahora });
   }
   await db.reemplazarDeObra("avances", id, avances);
   // gastos: conserva la foto de soporte de los que ya existían (misma fecha, valor y detalle)
@@ -1084,7 +1133,7 @@ async function aplicarControl(file, x, obraId) {
   await db.reemplazarDeObra("gastos", id, x.gastos);
   await guardarPlantilla(id, file.name, new Blob([x.buf], { type: file.type || "application/vnd.ms-excel.sheet.macroEnabled.12" }));
   const resumen = `${obraId ? "Actualizado" : "Importado"}: ${x.items.length} ítems, ${x.personal.length} personas, ${x.bitacora.length} días de bitácora, ${avances.length} avances` +
-    (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (x.contratos.length ? `, ${x.contratos.length} contratos` : "") + (sinItem ? ` (${sinItem} actividad(es) sin ítem)` : "");
+    (x.gastos.length ? `, ${x.gastos.length} gastos` : "") + (x.contratos.length ? `, ${x.contratos.length} contratos` : "") + (sinItem ? ` (${sinItem} actividad(es) que no están en el presupuesto)` : "");
   return { id, resumen };
 }
 
@@ -1131,7 +1180,7 @@ async function exportarExcel(id) {
   const act = [["FECHA", "ACTIVIDAD DEL PRESUPUESTO", "ÍTEM", "CANTIDAD DEL DÍA", "UND", "VALOR EJECUTADO", "DETALLE / FRENTE DE TRABAJO", "EQUIPO Y HERRAMIENTA"]];
   for (const a of d.avances.sort((x, y) => x.fecha.localeCompare(y.fecha))) {
     const it = d.items.find(i => i.id === a.itemId);
-    act.push([fecha(a.fecha), it ? etiquetaItem(it) : "", it?.codigo || "", Number(a.cantidad), it?.und || "", it ? Math.round(a.cantidad * it.vu * d.factor) : "", a.frente || "", a.equipo || ""]);
+    act.push([fecha(a.fecha), it ? etiquetaItem(it) : (a.etiquetaExcel || ""), it?.codigo || "", Number(a.cantidad), it?.und || "", it ? Math.round(a.cantidad * it.vu * d.factor) : "", a.frente || "", a.equipo || ""]);
   }
   const per = [["CARGO", "NOMBRE", "CANT."], ...d.personal.map(p => [p.cargo, p.nombre, 1])];
   const pre = [["ÍTEM", "DESCRIPCIÓN", "UND", "CANTIDAD", "VALOR UNITARIO", "VALOR TOTAL", "EJECUTADO", "% AVANCE"],
@@ -1151,13 +1200,25 @@ async function exportarExcel(id) {
 }
 
 // En iPhone lo más confiable es la hoja de "Compartir" (correo, WhatsApp, Archivos…)
-async function entregarArchivo(blob, nombre) {
+async function entregarArchivo(blob, nombre, avisos = []) {
   const file = new File([blob], nombre, { type: blob.type });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: nombre }); return; } catch (e) { if (e.name === "AbortError") return; }
-  }
-  const a = h("a", { href: URL.createObjectURL(blob), download: nombre }); document.body.append(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  const compartir = async () => {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: nombre }); return true; }
+      catch (e) { if (e.name === "AbortError") return true; if (e.name !== "NotAllowedError") console.warn(e); return false; }
+    }
+    const a = h("a", { href: URL.createObjectURL(blob), download: nombre }); document.body.append(a); a.click(); a.remove();
+    return true;
+  };
+  // Si el archivo tardó en armarse, el iPhone exige un toque nuevo para abrir "Compartir": se muestra una hoja con el botón.
+  if (!avisos.length && await compartir()) return;
+  const capa = h("div", { class: "hoja-capa", onclick: e => { if (e.target === capa) capa.remove(); } },
+    h("div", { class: "hoja" },
+      h("div", { class: "t-nom" }, "Archivo listo"), h("div", { class: "t-sub" }, nombre),
+      avisos.length ? h("div", { class: "alerta ambar avisos" }, h("div", {}, ...avisos.map(a => h("p", {}, "• " + a)))) : null,
+      h("button", { class: "btn grande", onclick: async () => { if (await compartir()) capa.remove(); } }, ico("bajar"), "Compartir / guardar"),
+      h("button", { class: "btn sec", onclick: () => capa.remove() }, "Cerrar")));
+  document.body.append(capa);
 }
 
 // ------------------------------------------------------------------ rutas

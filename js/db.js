@@ -94,13 +94,12 @@ export async function reemplazarDeObra(store, obraId, lista) {
 
 // Copia de seguridad completa (incluye fotos en base64)
 export async function exportarTodo() {
-  const out = { app: "control-obras", version: 1, fecha: new Date().toISOString(), datos: {} };
+  const out = { app: "control-obras", version: 2, fecha: new Date().toISOString(), datos: {} };
   for (const s of STORES) {
     if (s === "pendientes") continue;
     const regs = await todos(s);
-    if (s === "fotos") {
-      for (const f of regs) if (f.blob) { f.blob64 = await blobA64(f.blob); delete f.blob; }
-    }
+    // todo archivo guardado (fotos, soportes de gastos, Excel base, contratos) va en base64
+    for (const r of regs) for (const [k, v] of Object.entries(r)) if (v instanceof Blob) r[k] = { __blob64: await blobA64(v), tipo: v.type };
     out.datos[s] = regs;
   }
   return out;
@@ -111,7 +110,12 @@ export async function importarTodo(json) {
   for (const s of Object.keys(json.datos)) {
     if (!STORES.includes(s) || s === "pendientes") continue;
     const regs = json.datos[s];
-    if (s === "fotos") for (const f of regs) if (f.blob64) { f.blob = await (await fetch(f.blob64)).blob(); delete f.blob64; }
+    for (const r of regs) {
+      if (r.blob64) { r.blob = await (await fetch(r.blob64)).blob(); delete r.blob64; }   // copias de la versión anterior
+      for (const [k, v] of Object.entries(r)) if (v && typeof v === "object" && v.__blob64) {
+        const b = await (await fetch(v.__blob64)).blob(); r[k] = new Blob([b], { type: v.tipo || b.type });
+      }
+    }
     await tx(s, "readwrite", t => { const os = t.objectStore(s); for (const r of regs) os.put(r); });
   }
   avisar();
