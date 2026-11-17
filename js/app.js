@@ -3,6 +3,7 @@ import * as db from "./db.js";
 import { extraerTexto, extraerDatos } from "./contrato.js";
 import { llenarExcel, leerBase } from "./miexcel.js";
 import { informeGastosPDF } from "./informe.js";
+import { iniciarSST, rutaSST, habilitacion, pendientesInicio } from "./sst.js";
 
 const EMPRESAS = {
   "FLASSSERVIC S.A.S.": { nit: "900.740.386-7", lema: "Construimos soluciones, transformamos territorios", logo: "icons/logo-flassservic.png" },
@@ -159,7 +160,7 @@ async function vistaInicio() {
 async function borrarObra(id, nombre) {
   const r = prompt(`Va a borrar la obra "${nombre || "sin nombre"}" con toda su bitácora, avances y fotos. No se puede deshacer.\n\nSi está seguro, escriba BORRAR`);
   if ((r || "").trim().toUpperCase() !== "BORRAR") { if (r !== null) toast("No se borró: debe escribir BORRAR"); return false; }
-  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "materiales", "movimientos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
+  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "materiales", "movimientos", "documentos", "sst", "tareasSST"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
   await db.borrar("obras", id); toast("Obra borrada"); return true;
 }
 
@@ -270,6 +271,7 @@ async function vistaResumen(id) {
       kpi("Bitácora", d.bitacora.length + (d.bitacora.length === 1 ? " día" : " días"), "registrados"),
       kpi("Fotos", d.fotos.length, "en la obra"),
       kpi("Personal", d.personal.length, "en la cuadrilla")),
+    await avisoInicioSST(id, d),
     d.cd && d.avance < d.tiempo - 0.1 ? h("div", { class: "alerta ambar" }, ico("alerta"), `Va ${Math.round((d.tiempo - d.avance) * 100)} puntos atrás del tiempo`) : null,
     h("div", { class: "mosaico" },
       h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/bitacora/${hoy()}`) }, ico("bitacora"), "Bitácora de hoy"),
@@ -277,13 +279,22 @@ async function vistaResumen(id) {
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("plata"), "Registrar gasto"),
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/almacen`) }, ico("obra"), "Almacén"),
-      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?")),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?"),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/sst`) }, ico("alerta"), "SST · permisos y charlas")),
     d.items.length ? h("a", { class: "tarjeta fila", href: `#/obra/${id}/avance`, onclick: () => { filtroItems = "sin"; } },
       h("div", {}, h("div", { class: "t-nom" }, `${d.items.filter(i => !(d.ejec[i.id] > 0)).length} de ${d.items.length} ítems sin iniciar`), h("div", { class: "t-sub" }, "Ver los ítems que no llevan ejecución")),
       ico("avance")) : null,
     top.length ? h("section", {}, h("h2", {}, "Ítems con avance"), ...top.map(it => filaItem(it, d.ejec[it.id] || 0, id))) : null,
     ultFotos.length ? h("section", {}, h("h2", {}, "Últimas fotos"), galeria(ultFotos, id)) : null,
     tabs(id, "resumen"));
+}
+// Recordatorio de SST en cada obra: se muestra hasta completar lo de "antes de iniciar"
+async function avisoInicioSST(id, d) {
+  const ini = await pendientesInicio(id, d); const faltan = ini.filter(x => !x.ok);
+  if (!faltan.length) return null;
+  return h("a", { class: "tarjeta fila aviso-sst", href: `#/obra/${id}/sst` },
+    h("div", {}, h("div", { class: "t-nom" }, `SST antes de iniciar: faltan ${faltan.length} de ${ini.length}`),
+      h("div", { class: "t-sub" }, faltan.slice(0, 3).map(x => x.l.replace(/ \(.*\)$/, "")).join(" · ") + (faltan.length > 3 ? "…" : ""))), ico("alerta"));
 }
 const kpi = (lab, val, sub) => h("div", { class: "kpi" }, h("div", { class: "k-lab" }, lab), h("div", { class: "k-val" }, String(val)), h("div", { class: "k-sub" }, sub));
 function filaItem(it, ej, obraId) {
@@ -1092,7 +1103,7 @@ async function descargarMiExcel(id) {
         return { fecha: serie(g.fecha), tipo: g.tipo, detalle: g.detalle, proveedor: g.proveedor, factura: g.factura, valor: g.valor === "" || g.valor == null ? "" : Number(g.valor) || 0,
           item: g.item, inversionista: g.inversionista, otro: g.otro, abonoA: c ? `${c.numero} – ${c.contratista}` : (g.contratoId ? "" : g.abonoA || "") }; }),
       CONTRATOS: contratos.reduce((arr, c) => { arr[c.numero - 1] = { tipo: c.tipo, objeto: c.objeto, contratista: c.contratista, fechaLimite: serie(c.fechaLimite), valor: Number(c.valor) || "" }; return arr; }, []),
-      PERSONAL: d.personal.map(p => ({ cargo: p.cargo, nombre: p.nombre, cant: Number(p.cant) || 1 })),
+      PERSONAL: d.personal.filter(p => !(p.orden >= 1e6 && p.retiro)).map(p => ({ cargo: p.cargo, nombre: p.nombre, cant: Number(p.cant) || 1 })),
       INICIO: { nombre: o.nombreAuto ? "" : o.nombre, contrato: o.contrato, entidad: o.entidad, municipio: o.municipio, depto: o.depto,
         inicio: serie(o.inicio), plazo: Number(o.plazo) || "", empresa: o.empresa && o.empresa !== "Otra" ? o.empresa : "", residente: o.residente, supervisor: o.supervisor },
     };
@@ -1121,6 +1132,7 @@ async function vistaMas(id) {
   const base = await plantillaDe(id);
   pantalla("Más", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/tablero` }, h("div", { class: "t-nom" }, "Tablero · ¿cómo va la plata?"), h("div", { class: "t-sub" }, "Avance, gasto, utilidad e inversionistas")),
+    h("a", { class: "tarjeta menu", href: `#/obra/${id}/sst` }, h("div", { class: "t-nom" }, "SST de la obra"), h("div", { class: "t-sub" }, "Personal habilitado, charlas, ATS, permisos y listas de chequeo")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/almacen` }, h("div", { class: "t-nom" }, "Almacén de obra"), h("div", { class: "t-sub" }, "Qué hay, cuánto queda, qué entró y qué se gastó")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/presupuesto` }, h("div", { class: "t-nom" }, "Presupuesto"), h("div", { class: "t-sub" }, d.items.length ? `${d.items.length} ítems · costo directo ${pesos(d.cd)}` : "Sin cargar")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/personal` }, h("div", { class: "t-nom" }, "Personal"), h("div", { class: "t-sub" }, `${d.personal.length} persona(s)`)),
@@ -1155,7 +1167,8 @@ async function vistaPersonal(id) {
     h("input", { name: "cargo", placeholder: "Cargo (maestro, oficial…)" }),
     h("button", { class: "btn", type: "submit" }, "Agregar"));
   pantalla("Personal", { atras: `#/obra/${id}/mas`, subtitulo: d.obra.nombre }, form,
-    d.personal.map(p => h("div", { class: "tarjeta fila" }, h("div", {}, h("div", { class: "t-nom" }, p.nombre), h("div", { class: "t-sub" }, p.cargo || "")),
+    h("p", { class: "nota" }, "Toque una persona para llenar su seguridad social, concepto médico y certificado de alturas (SST-FO-14)."),
+    d.personal.map(p => h("div", { class: "tarjeta fila" }, h("a", { href: `#/obra/${id}/sst/trab/${p.id}` }, h("div", { class: "t-nom" }, p.nombre), h("div", { class: "t-sub" }, [p.cargo, { bien: "SST al día", ojo: "SST por revisar", mal: "SST: no habilitado" }[habilitacion(p).estado]].filter(Boolean).join(" · "))),
       h("button", { class: "btn mini peligro", onclick: async () => { if (confirm("¿Quitar a " + p.nombre + "?")) { await db.borrar("personal", p.id); vistaPersonal(id); } } }, "Quitar"))));
 }
 
@@ -1357,6 +1370,13 @@ async function aplicarControl(file, x, obraId) {
   await db.reemplazarDeObra("items", id, x.items);
   const porCodigo = new Map(x.items.map(i => [i.codigo, i.id]));
   const porEtiqueta = new Map(x.items.map(i => [etiquetaItem(i).toLowerCase(), i.id]));
+  // personal: conserva el id y los datos SST (seguridad social, concepto médico, alturas, soportes) de quien ya estaba
+  const viejosPer = obraId ? await db.deObra("personal", id) : [];
+  const nomPer = n => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  const mapaPer = new Map(viejosPer.map(p => [nomPer(p.nombre), p]));
+  x.personal = x.personal.map(p => { const v = mapaPer.get(nomPer(p.nombre)); if (v) mapaPer.delete(nomPer(p.nombre)); return v ? { ...v, ...p, id: v.id } : p; });
+  // quien tiene registros SST pero ya no está en el Excel se conserva como retirado (no se pierden sus firmas ni soportes)
+  for (const v of mapaPer.values()) if (v.cedula || v.arl || v.concepto || (v.soportes || []).length) x.personal.push({ ...v, retiro: v.retiro || new Date().toISOString().slice(0, 10), orden: 1e6 });
   await db.reemplazarDeObra("personal", id, x.personal);
   await db.reemplazarDeObra("bitacora", id, x.bitacora);
   let sinItem = 0;
@@ -1493,6 +1513,7 @@ async function rutear() {
       if (v === "presupuesto") return await vistaPresupuesto(id);
       if (v === "personal") return await vistaPersonal(id);
       if (v === "datos") return await vistaDatosObra(id);
+      if (v === "sst") return await rutaSST(id, p.slice(2));
     }
     ir("#/");
   } catch (e) {
@@ -1500,6 +1521,7 @@ async function rutear() {
     $("#app").innerHTML = ""; $("#app").append(h("div", { class: "alerta" }, "Ocurrió un error: " + e.message));
   }
 }
+iniciarSST({ h, db, pantalla, tabs, ico, toast, ir, hoy, fechaCorta, cargarObra, comprimir, entregarArchivo, EMPRESAS });
 addEventListener("hashchange", rutear);
 rutear();
 

@@ -251,3 +251,83 @@ details.opcional[open] > *:not(summary){margin-top:10px}
 .fm-btn:active{transform:scale(.9)}
 .fm-btn.menos{background:var(--green-tile);color:var(--green-ink)}
 .fm-btn.mas{background:var(--navy);color:#fff}
+
+/* ---------------- SST */
+.sec-sst{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.sec-sst>h2{margin:0 0 2px;color:var(--navy);text-transform:none;letter-spacing:0;font-size:15px}
+.sec-sst.cierre{border-color:var(--green)}
+.nota-formato{background:var(--navy-soft);padding:10px 12px;border-radius:12px;color:var(--navy)}
+fieldset.marcas{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:6px}
+fieldset.marcas legend{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px;padding:0}
+fieldset.marcas .chk{padding:6px 10px;border:1px solid var(--line);border-radius:12px;font-size:14px}
+fieldset.marcas .chk input{width:20px;height:20px}
+.lista-chk{display:flex;flex-direction:column;gap:0}
+.lc-grupo{font-size:12px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;padding:12px 0 4px}
+.lc-fila{display:flex;flex-direction:column;gap:6px;padding:9px 0;border-top:1px solid var(--line)}
+.lc-fila.malo{background:var(--red-soft);margin:0 -14px;padding:9px 14px}
+.lc-txt{font-size:14px;line-height:1.35}
+.lc-n{display:inline-block;min-width:22px;color:var(--muted);font-size:12px;font-weight:600}
+.lc-crit{color:var(--red)}
+.lc-ops{display:flex;gap:6px}
+.lc-op{flex:1;min-height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;font-weight:600;cursor:pointer}
+.lc-op.sel.b{background:var(--green);border-color:var(--green);color:#fff}
+.lc-op.sel.m{background:var(--red);border-color:var(--red);color:#fff}
+.lc-op.sel.na{background:var(--muted);border-color:var(--muted);color:#fff}
+.lc-obs{font-size:14px}
+.lc-addobs{align-self:flex-start;border:0;background:none;color:var(--muted);font:inherit;font-size:12.5px;padding:0;cursor:pointer}
+.tabla-sst{display:flex;flex-direction:column;gap:8px}
+.ts-fila{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px}
+.ts-fila.malo{background:var(--red-soft)}
+.ts-n{font-weight:700;color:var(--muted);min-width:18px;padding-top:4px}
+.ts-campos{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ts-campos .campo:has(textarea){grid-column:1/-1}
+.ts-campos.gases{grid-template-columns:repeat(3,1fr)}
+.inv-fila{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-top:1px solid var(--line)}
+.inv-fila.malo{background:var(--red-soft)}
+.inv-fila small{color:var(--muted)}
+.inv-campos{display:grid;grid-template-columns:1fr 1.3fr 1.2fr;gap:6px;align-items:center}
+.personal-sst{display:flex;flex-direction:column;gap:8px}
+.ps-fila{border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.ps-fila.malo{background:var(--red-soft);border-color:var(--red)}
+.ps-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ps-req{display:flex;flex-wrap:wrap;gap:4px}
+.ps-firmas{display:flex;gap:10px;flex-wrap:wrap}
+.ps-firmas>div{display:flex;flex-direction:column;gap:4px}
+.ps-firmas small{color:var(--muted);font-weight:600}
+.ps-agregar{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.sug.deshab{opacity:.65}.sug.deshab small{color:var(--red)}
+.firma-caja{display:flex;align-items:center;gap:8px;min-height:44px}
+.firma-caja img{height:44px;width:110px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px}
+.firma-cv{width:100%;aspect-ratio:2.5;background:#fff;border:2px dashed var(--line);border-radius:12px;touch-action:none}
+.firmas-sst{display:flex;flex-direction:column;gap:10px}
+.firma-rol{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:10px}
+.firma-rol:first-child{border-top:0;padding-top:0}
+.fr-l{font-size:13px;font-weight:600;color:var(--navy)}
+.decision{border-radius:14px;padding:12px 14px;font-size:14px}
+.decision.bien{background:var(--green-soft)}.decision.mal{background:var(--red-soft)}.decision.ojo{background:var(--amber-soft)}
+.decision.mal .t-nom{color:var(--red)}
+.decision ul{margin:6px 0 0;padding-left:18px}
+.acc-sst{display:flex;flex-direction:column;gap:10px}
+.foto-mini{position:relative}
+.foto-mini img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;display:block}
+.foto-mini small{display:block;font-size:11px;color:var(--muted)}
+.foto-mini .quitar{position:absolute;top:4px;right:4px;width:30px;height:30px}
+.pasos{display:flex;flex-direction:column;gap:8px}
+.paso{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.paso.ok{border-color:var(--green)}.paso.bloq{opacity:.6}
+.paso-n{width:32px;height:32px;border-radius:50%;background:var(--navy-soft);color:var(--navy);display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}
+.paso.ok .paso-n{background:var(--green);color:#fff}
+.paso-txt{flex:1;min-width:0}
+.paso-reg{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--navy);margin-top:4px;text-decoration:none}
+.estado-tarea{font-weight:600}
+.tarea-op{text-align:left;width:100%;font:inherit;cursor:pointer}
+@media (prefers-color-scheme: dark){.firma-caja img,.firma-cv{background:#fff}.fr-l,.sec-sst>h2,.lc-grupo{color:#C9D8F2}}
+.checklist .fila-mat{cursor:pointer;color:inherit;text-decoration:none}
+.checklist input[type=checkbox]{width:24px;height:24px;accent-color:var(--green);flex:none;margin:0}
+.chk-ico{width:24px;height:24px;border-radius:50%;border:2px solid var(--amber-ink);flex:none;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.chk-ico.ok{background:var(--green);border-color:var(--green);color:#fff}
+.aviso-sst{background:var(--amber-soft);border-color:transparent}
+.aviso-sst .t-nom,.aviso-sst .t-sub,.aviso-sst svg{color:var(--amber-ink)}
+.checklist .fm-nom{white-space:normal;overflow:visible;text-overflow:clip}
+a.fila-mat{color:inherit;text-decoration:none}
+button.tarjeta{width:100%;text-align:left;font:inherit;cursor:pointer}
