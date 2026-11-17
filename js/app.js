@@ -829,19 +829,17 @@ async function datosAlmacen(id) {
 }
 const cant = (n, und) => `${num(n, 3)} ${und || ""}`.trim();
 function tarjetaMaterial(f, id) {
-  return h("div", { class: "tarjeta material" + (f.queda <= 0 && f.entro ? " agotado" : "") },
-    h("a", { class: "mat-link", href: `#/obra/${id}/almacen/m/${f.m.id}` },
-      h("div", { class: "g-top" }, h("div", { class: "t-nom" }, f.m.nombre), h("span", { class: "est " + f.estado[1] }, f.estado[0])),
-      h("div", { class: "mat-queda" }, h("b", {}, num(f.queda, 3)), " ", f.m.und || "", h("span", {}, " quedan")),
-      h("div", { class: "t-sub" }, `Entró ${cant(f.entro, f.m.und)} · se gastó ${cant(f.gasto, f.m.und)}`),
-      f.entro ? h("div", { class: "prog" }, h("div", { style: `width:${Math.max(0, Math.min(100, f.queda / f.entro * 100))}%` })) : null),
-    h("div", { class: "mat-acc" },
-      h("button", { class: "btn mini verde", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/salida`); } }, "− Se gastó"),
-      h("button", { class: "btn mini sec", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/entrada`); } }, "+ Entró")));
+  const alerta = f.estado[1] === "mal" || f.estado[1] === "ojo";
+  return h("div", { class: "fila-mat" + (alerta ? " " + f.estado[1] : "") },
+    h("a", { class: "fm-txt", href: `#/obra/${id}/almacen/m/${f.m.id}` },
+      h("div", { class: "fm-nom" }, f.m.nombre), h("div", { class: "fm-sub" }, alerta ? f.estado[0] : `Entró ${num(f.entro, 3)} · se gastó ${num(f.gasto, 3)}`)),
+    h("div", { class: "fm-queda" }, h("b", {}, num(f.queda, 3)), h("small", {}, f.m.und || "")),
+    h("button", { class: "fm-btn menos", "aria-label": "Se gastó", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/salida`); } }, "−"),
+    h("button", { class: "fm-btn mas", "aria-label": "Entró", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/entrada`); } }, "+"));
 }
 async function vistaAlmacen(id) {
   const d = await cargarObra(id); const k = await datosAlmacen(id);
-  const lista = h("div", { class: "acciones" });
+  const lista = h("div", { class: "lista-mat" });
   const buscar = h("input", { type: "search", placeholder: "Buscar material…", value: almFiltro, oninput: () => { almFiltro = buscar.value; pintar(); } });
   const pintar = () => {
     lista.innerHTML = "";
@@ -853,14 +851,15 @@ async function vistaAlmacen(id) {
   pintar();
   const agotados = k.filas.filter(f => f.estado[1] === "mal").length, bajos = k.filas.filter(f => f.estado[1] === "ojo").length;
   pantalla("Almacén de obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
-    h("div", { class: "mosaico" },
-      h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/entrada`) }, ico("bajar"), "Entró material"),
-      h("button", { class: "tile verde", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/salida`) }, ico("subir"), "Se gastó material")),
-    h("div", { class: "kpis" }, kpi("Materiales", k.filas.length, `${k.movimientos.length} movimiento(s)`),
-      kpi("Atención", agotados + bajos, `${agotados} agotado(s) · ${bajos} por agotarse`)),
+    h("div", { class: "fila2" },
+      h("button", { class: "btn", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/entrada`) }, "+ Entró"),
+      h("button", { class: "btn verde", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/salida`) }, "− Se gastó")),
+    agotados + bajos ? h("div", { class: "alerta ambar" }, ico("alerta"), [agotados ? `${agotados} agotado(s)` : "", bajos ? `${bajos} por agotarse` : ""].filter(Boolean).join(" · ")) : null,
     buscar, lista,
-    h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/almacen/m/nuevo`) }, ico("sumar"), "Agregar material sin movimiento"),
-    k.filas.length ? h("button", { class: "btn sec", onclick: () => exportarAlmacen(id) }, ico("excel"), "Exportar inventario (Excel)") : null,
+    h("details", { class: "opcional" }, h("summary", {}, "Más opciones"),
+      h("div", { class: "acciones" },
+        h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/almacen/m/nuevo`) }, ico("sumar"), "Agregar material sin movimiento"),
+        k.filas.length ? h("button", { class: "btn sec", onclick: () => exportarAlmacen(id) }, ico("excel"), "Exportar inventario (Excel)") : null)),
     tabs(id, "resumen"));
 }
 function filaMovimiento(v, mat, id, itemsPorId) {
@@ -902,17 +901,44 @@ async function vistaMaterial(id, mId) {
       for (const v of movs) await db.borrar("movimientos", v.id);
       await db.borrar("materiales", m.id); ir(`#/obra/${id}/almacen`); } }, "Borrar material") : null);
 }
-// campos para elegir o crear un material (se usan en el movimiento y en el gasto)
-function campoMaterial(materiales, selId, prefijo = "") {
-  const nuevo = h("div", { class: "fila2", hidden: true },
-    h("label", { class: "campo" }, h("span", {}, "Nombre del material nuevo"), h("input", { name: prefijo + "mat_nombre", placeholder: "Cemento gris 50 kg" })),
-    h("label", { class: "campo" }, h("span", {}, "Unidad"), h("input", { name: prefijo + "mat_und", list: "lista-und", value: "bulto" })));
-  const sel = h("select", { name: prefijo + "materialId", onchange: () => { nuevo.hidden = sel.value !== "+nuevo"; } },
-    h("option", { value: "" }, "— Elija el material —"),
-    materiales.map(m => h("option", { value: m.id, selected: m.id === selId }, `${m.nombre} (${m.und || "und"})`)),
-    h("option", { value: "+nuevo", selected: !materiales.length && !selId }, "+ MATERIAL NUEVO"));
-  if (!materiales.length && !selId) nuevo.hidden = false;
-  return h("div", { class: "form" }, h("label", { class: "campo" }, h("span", {}, "Material"), sel), nuevo,
+// Elegir material: se escribe para buscar en los existentes; "Material nuevo" es un botón aparte.
+function campoMaterial(materiales, selId, prefijo = "", alCambiar = () => {}, quedas = new Map()) {
+  const oculto = h("input", { type: "hidden", name: prefijo + "materialId", value: selId || "" });
+  const buscar = h("input", { type: "search", placeholder: "Escriba el material…", autocomplete: "off" });
+  const lista = h("div", { class: "sugerencias" });
+  const elegido = h("div", { class: "elegido", hidden: true });
+  const nuevo = h("div", { class: "nuevo-mat", hidden: true },
+    h("div", { class: "fila2" },
+      h("label", { class: "campo" }, h("span", {}, "Nombre del material nuevo"), h("input", { name: prefijo + "mat_nombre", placeholder: "Cemento gris 50 kg" })),
+      h("label", { class: "campo" }, h("span", {}, "Unidad"), h("input", { name: prefijo + "mat_und", list: "lista-und", value: "bulto" }))),
+    h("button", { type: "button", class: "btn mini sec", onclick: () => elegir("") }, "Mejor buscar uno que ya existe"));
+  const btnNuevo = h("button", { type: "button", class: "btn mini sec btn-nuevo" }, ico("sumar"), "Material nuevo");
+  const elegir = idSel => {
+    oculto.value = idSel; lista.innerHTML = "";
+    const m = materiales.find(x => x.id === idSel);
+    nuevo.hidden = idSel !== "+nuevo"; elegido.hidden = !m; buscar.hidden = !!m || idSel === "+nuevo"; btnNuevo.hidden = idSel === "+nuevo";
+    elegido.innerHTML = "";
+    if (m) elegido.append(h("div", {}, h("b", {}, m.nombre), h("span", {}, quedas.has(m.id) ? ` · quedan ${num(quedas.get(m.id), 3)} ${m.und || ""}` : ` · ${m.und || ""}`)),
+      h("button", { type: "button", class: "btn mini sec", onclick: () => { elegir(""); buscar.focus(); } }, "Cambiar"));
+    alCambiar(m || null);
+  };
+  const mostrar = () => {
+    lista.innerHTML = "";
+    const q = buscar.value.toLowerCase().trim();
+    const fs = materiales.filter(m => !q || m.nombre.toLowerCase().includes(q)).slice(0, 8);
+    for (const m of fs) lista.append(h("button", { type: "button", class: "sug", onclick: () => elegir(m.id) },
+      h("span", {}, m.nombre), h("small", {}, quedas.has(m.id) ? `${num(quedas.get(m.id), 3)} ${m.und || ""}` : m.und || "")));
+    if (q && !materiales.some(m => m.nombre.toLowerCase() === q))
+      lista.append(h("button", { type: "button", class: "sug crear", onclick: () => { elegir("+nuevo"); nuevo.querySelector("input").value = buscar.value.trim(); } },
+        ico("sumar"), h("span", {}, `Crear "${buscar.value.trim()}" como material nuevo`)));
+  };
+  buscar.addEventListener("input", mostrar); buscar.addEventListener("focus", mostrar);
+  btnNuevo.onclick = () => { elegir("+nuevo"); nuevo.querySelector("input").focus(); };
+  if (!materiales.length && !selId) setTimeout(() => elegir("+nuevo"));
+  else setTimeout(() => elegir(selId || ""));
+  return h("div", { class: "campo-material" },
+    h("div", { class: "cm-top" }, h("span", { class: "cm-lab" }, "Material"), btnNuevo),
+    oculto, buscar, lista, elegido, nuevo,
     h("datalist", { id: "lista-und" }, UNIDADES.map(u => h("option", { value: u }))));
 }
 async function materialDeFormulario(id, fd, materiales, prefijo = "") {
@@ -944,12 +970,9 @@ async function vistaMovimiento(id, movId, tipoIni, fechaIni) {
     pintarInfo();
   };
   btnE.onclick = () => { tipo = "entrada"; pintarTipo(); }; btnS.onclick = () => { tipo = "salida"; pintarTipo(); };
-  const campoMat = campoMaterial(k.materiales, v.materialId);
-  const pintarInfo = () => {
-    const f = k.filas.find(x => x.m.id === campoMat.querySelector("select").value);
-    info.textContent = f ? `En el almacén quedan ${cant(f.queda, f.m.und)}.` : "";
-  };
-  campoMat.querySelector("select").addEventListener("change", pintarInfo);
+  const quedas = new Map(k.filas.map(f => [f.m.id, f.queda]));
+  const pintarInfo = () => {};
+  const campoMat = campoMaterial(k.materiales, v.materialId, "", () => {}, quedas);
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault(); const fd = new FormData(form);
       const m = await materialDeFormulario(id, fd, k.materiales);
@@ -964,13 +987,12 @@ async function vistaMovimiento(id, movId, tipoIni, fechaIni) {
       Object.assign(v, { tipo, materialId: m.id, cantidad: c, fecha: fd.get("fecha"), detalle: (fd.get("detalle") || "").trim(), itemId: tipo === "salida" ? fd.get("itemId") || "" : "" });
       await db.guardar("movimientos", v); toast(tipo === "salida" ? "Salida registrada" : "Entrada registrada"); history.back();
     } },
-    h("div", { class: "chips" }, btnE, btnS),
-    campoMat, info,
+    h("div", { class: "chips tipo-mov" }, btnE, btnS),
+    campoMat,
     h("div", { class: "fila2" },
       h("label", { class: "campo" }, h("span", {}, "Cantidad"), h("input", { name: "cantidad", inputmode: "decimal", value: v.cantidad ?? "", required: true })),
       h("label", { class: "campo" }, h("span", {}, "Fecha"), h("input", { type: "date", name: "fecha", value: v.fecha, required: true }))),
-    camposSal,
-    h("label", { class: "campo" }, lblDet, det),
+    h("details", { class: "opcional", open: !!(v.detalle || v.itemId) }, h("summary", {}, "Más datos (opcional)"), camposSal, h("label", { class: "campo" }, lblDet, det)),
     h("button", { class: "btn grande", type: "submit" }, "Guardar"));
   pintarTipo();
   pantalla(movId === "nuevo" ? "Movimiento de almacén" : "Editar movimiento", { atras: `#/obra/${id}/almacen`, subtitulo: d.obra.nombre }, form,
