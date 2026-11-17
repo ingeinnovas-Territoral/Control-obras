@@ -1,6 +1,6 @@
 // Módulo SST de obra: personal habilitado, charlas, ATS, inspecciones, permisos, listas de chequeo,
 // EPP, reportes y botiquín, con firmas en pantalla y expedición en PDF.
-import { FORMATOS, TAREAS, SUGERENCIAS_ATS } from "./sst-formatos.js";
+import { FORMATOS, TAREAS, SUGERENCIAS_ATS, REGLAS_OBRA, REGLAS_EXTRA } from "./sst-formatos.js";
 import { pdfRegistro } from "./sst-pdf.js";
 
 let C;                                    // utilidades de la app (h, db, pantalla, …)
@@ -384,7 +384,8 @@ async function vistaNuevaTarea(id) {
   C.pantalla("Nueva tarea crítica", { atras: `#/obra/${id}/sst`, subtitulo: d.obra.nombre },
     h("label", { class: "campo" }, h("span", {}, "¿Qué se va a hacer?"), desc),
     h("p", { class: "nota" }, "Elija el tipo de tarea. La app le muestra los formatos en el orden en que se diligencian: ATS, inspección de equipos, permiso y lista de chequeo."),
-    h("div", { class: "acciones" }, Object.entries(TAREAS).map(([k, t]) => h("button", { class: "tarjeta fila tarea-op", onclick: async () => {
+    h("div", { class: "acciones" }, (() => { const an = analizarObra(d); const est = Object.fromEntries(an.tareas.map(x => [x.tarea, x.estado])); const peso = { si: 0, posible: 1, no: 2 };
+      return Object.entries(TAREAS).sort((a, b) => peso[est[a[0]] || "no"] - peso[est[b[0]] || "no"]); })().map(([k, t]) => h("button", { class: "tarjeta fila tarea-op", onclick: async () => {
       const tr = await C.db.guardar("tareasSST", { obraId: id, tipo: k, descripcion: desc.value.trim(), fecha: C.hoy(), creado: new Date().toISOString() });
       C.ir(`#/obra/${id}/sst/tarea/${tr.id}`); } }, h("div", {}, h("div", { class: "t-nom" }, t.l), h("div", { class: "t-sub" }, t.pasos.map(p => FORMATOS[p].codigo.replace("SST-", "")).join(" → "))), C.ico("avance")))));
 }
@@ -456,6 +457,58 @@ async function vistaTrabajador(id, pid) {
       h("button", { class: "btn grande", onclick: async () => { if (!p.nombre?.trim()) return alert("Escriba el nombre."); p.nombre = p.nombre.trim(); await C.db.guardar("personal", p); C.toast("Guardado"); C.ir(`#/obra/${id}/sst/personal`); } }, "Guardar")));
 }
 
+// ---------------------------------------------------------------- análisis de la obra: objeto + presupuesto → tareas críticas y documentos
+const normal = x => " " + String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ") + " ";
+const tiene = (txt, palabras) => palabras.filter(w => txt.includes(" " + normal(w).trim()));
+export function analizarObra(d) {
+  const ajustes = d.obra.sst?.tareas || {};          // lo que el residente confirmó o descartó a mano
+  const fuentes = [{ codigo: "Objeto", descripcion: d.obra.nombre || "" }, ...d.items];
+  const tareas = REGLAS_OBRA.map(rg => {
+    const seguros = [], posibles = [];
+    for (const it of fuentes) { const t = normal(it.descripcion);
+      if (tiene(t, rg.si).length) seguros.push(it); else if (tiene(t, rg.posible).length) posibles.push(it); }
+    const auto = seguros.length ? "si" : posibles.length ? "posible" : "no";
+    const estado = ajustes[rg.tarea] || auto;
+    return { ...rg, seguros, posibles, auto, estado };
+  });
+  const extra = REGLAS_EXTRA.map(rg => ({ ...rg, items: fuentes.filter(it => tiene(normal(it.descripcion), rg.si).length) })).filter(x => x.items.length);
+  return { tareas, extra };
+}
+const NIVEL = { si: ["Aplica", "mal"], posible: ["Revisar", "ojo"], no: ["No aplica", "info"] };
+
+async function vistaAnalisis(id) {
+  const { h } = C; const d = await C.cargarObra(id); const an = analizarObra(d);
+  const o = await C.db.uno("obras", id);
+  const marcar = async (k, v) => { o.sst = o.sst || {}; o.sst.tareas = { ...(o.sst.tareas || {}), [k]: v }; await C.db.guardar("obras", o); vistaAnalisis(id); };
+  const aplican = an.tareas.filter(t => t.estado === "si"), revisar = an.tareas.filter(t => t.estado === "posible");
+  const ref = it => it.codigo === "Objeto" ? "Objeto del contrato" : `${it.codigo} ${String(it.descripcion).slice(0, 70)}${String(it.descripcion).length > 70 ? "…" : ""}`;
+  const tarjeta = t => h("div", { class: "sec-sst" },
+    h("div", { class: "ps-top" }, h("div", { class: "t-nom" }, t.l), h("span", { class: "est " + NIVEL[t.estado][1] }, NIVEL[t.estado][0])),
+    (t.seguros.length || t.posibles.length) ? h("details", { class: "opcional" }, h("summary", {}, `Por qué: ${t.seguros.length + t.posibles.length} ítem(s) del presupuesto`),
+      h("ul", { class: "nota" }, [...t.seguros, ...t.posibles].slice(0, 12).map(it => h("li", {}, ref(it))))) : null,
+    t.estado !== "no" ? [
+      h("div", { class: "nota" }, h("b", {}, "Formatos: "), TAREAS[t.tarea].pasos.map(k => FORMATOS[k].codigo.replace("SST-", "") + (FORMATOS[k].lista ? ` lista ${FORMATOS[k].lista}` : FORMATOS[k].hoja ? ` hoja ${FORMATOS[k].hoja}` : "")).join(" → ")),
+      h("div", { class: "nota" }, h("b", {}, "Pedir / tener: "), h("ul", {}, t.requisitos.map(x => h("li", {}, x)))),
+      h("div", { class: "nota" }, h("b", {}, "EPP: "), t.epp.join(", "))] : null,
+    h("div", { class: "lc-ops" }, [["si", "Aplica"], ["posible", "Revisar"], ["no", "No aplica"]].map(([v, l]) =>
+      h("button", { type: "button", class: "lc-op" + (t.estado === v ? " sel " + (v === "si" ? "m" : v === "no" ? "b" : "na") : ""), onclick: () => marcar(t.tarea, v) }, l))));
+  C.pantalla("Lo que pide esta obra", { atras: `#/obra/${id}/sst`, subtitulo: d.obra.nombre },
+    h("p", { class: "nota nota-formato" }, d.items.length ? `Análisis del objeto y de los ${d.items.length} ítems del presupuesto. Revise lo marcado y corríjalo con los botones si no aplica en su obra.`
+      : "Todavía no hay presupuesto cargado: el análisis usa solo el objeto. Cargue el presupuesto en Más › Presupuesto para que sea completo."),
+    h("div", { class: "decision " + (aplican.length ? "mal" : "bien") }, h("div", { class: "t-nom" }, aplican.length ? `${aplican.length} tarea(s) crítica(s) en esta obra` : "Sin tareas críticas claras"),
+      aplican.length ? h("div", {}, aplican.map(t => t.l).join(" · ")) : null, revisar.length ? h("div", { class: "nota" }, `Por revisar: ${revisar.map(t => t.l).join(" · ")}`) : null),
+    h("h2", {}, "Documentos que debe pedir a todo el personal"),
+    h("div", { class: "sec-sst" }, h("ul", { class: "nota" }, ["Cédula", "Afiliación a EPS, pensión (AFP) y ARL clase V, con planilla PILA al día", "Concepto médico ocupacional de ingreso (apto)",
+      ...(aplican.some(t => t.tarea === "alturas") ? ["Certificado de alturas avanzado vigente de quienes suban; un coordinador de alturas en la obra"] : []),
+      ...(aplican.some(t => t.tarea === "electrico") ? ["Matrícula profesional del electricista"] : []),
+      ...(aplican.some(t => t.tarea === "confinado") ? ["Certificado de espacios confinados según el rol"] : [])].map(x => h("li", {}, x)))),
+    h("h2", {}, "Tareas críticas"), ...[...aplican, ...revisar].map(tarjeta),
+    h("details", { class: "opcional" }, h("summary", {}, `No detectadas en esta obra (${an.tareas.filter(t => t.estado === "no").length}) – márquelas si sí aplican`),
+      ...an.tareas.filter(t => t.estado === "no").map(tarjeta)),
+    an.extra.length ? [h("h2", {}, "Otros peligros de la obra"), ...an.extra.map(x => h("div", { class: "sec-sst" }, h("div", { class: "t-nom" }, x.l),
+      h("ul", { class: "nota" }, x.pedir.map(p => h("li", {}, p))), h("div", { class: "nota" }, `${x.items.length} ítem(s): ${x.items.slice(0, 4).map(i => i.codigo).join(", ")}${x.items.length > 4 ? "…" : ""}`)))] : null);
+}
+
 // ---------------------------------------------------------------- lista "antes de iniciar la obra" (se recuerda en cada obra nueva)
 export async function pendientesInicio(id, d) {
   d = d || await C.cargarObra(id);
@@ -474,6 +527,12 @@ export async function pendientesInicio(id, d) {
       det: activos.length ? `${activos.filter(p => conEPP.has(p.id)).length} de ${activos.length} con entrega firmada` : "" },
     { k: "botiquin", l: "Botiquín, camilla y extintores revisados (FO-11)", ok: regs.some(r => r.formato === "FO-11" && r.estado === "guardado"), nuevo: "FO-11" },
     { k: "emergencias", l: "Emergencias y rescate: ARL, centro de salud, punto de encuentro", ok: !!(e.arl && e.centro && e.punto), href: "emergencias" },
+    ...(() => { const an = analizarObra(d); const alt = an.tareas.find(t => t.tarea === "alturas" && t.estado === "si");
+      if (!alt) return [];
+      const coord = activos.some(p => habilitacion(p).cumple.coordinador), cert = activos.filter(p => habilitacion(p).cumple.alturas).length;
+      return [{ k: "alturas", l: "Personal certificado en alturas y un coordinador (la obra tiene trabajo en alturas)", ok: coord && cert >= 2, href: "personal",
+        det: `${cert} certificado(s) · ${coord ? "con" : "sin"} coordinador` }]; })(),
+    { k: "analisis", l: "Revisar lo que pide esta obra según el presupuesto", ok: !!(d.obra.sst?.analisisVisto), href: "analisis" },
     { k: "autorreporte", l: "Autorreporte de condiciones de salud firmado (FO-15, en papel)", ok: !!manual.autorreporte, manual: true },
   ];
 }
@@ -502,6 +561,9 @@ async function vistaSST(id) {
     h("h2", {}, "2. Cada día"),
     fila("FO-13", "Charla de 5 minutos / capacitación", charlaHoy ? "Ya hay registro hoy" : "Registro de asistencia con firmas (FO-13)", charlaHoy ? h("span", { class: "est bien" }, "Hoy ✓") : null),
     h("h2", {}, "3. Antes de cada tarea crítica"),
+    (() => { const an = analizarObra(d); const ap = an.tareas.filter(t => t.estado === "si"), rv = an.tareas.filter(t => t.estado === "posible");
+      return h("a", { class: "tarjeta fila", href: `#/obra/${id}/sst/analisis` }, h("div", {}, h("div", { class: "t-nom" }, "Lo que pide esta obra (según el presupuesto)"),
+        h("div", { class: "t-sub" }, ap.length ? ap.map(t => t.l.replace(/ \(.*\)$/, "")).join(" · ") + (rv.length ? ` · ${rv.length} por revisar` : "") : rv.length ? `${rv.length} tarea(s) por revisar` : "Sin tareas críticas detectadas")), C.ico("doc")); })(),
     h("a", { class: "btn grande", href: `#/obra/${id}/sst/tarea/nueva` }, C.ico("alerta"), "Nueva tarea crítica (ATS → inspección → permiso)"),
     tareas.length ? h("details", { class: "opcional", open: true }, h("summary", {}, `Tareas registradas (${tareas.length})`),
       ...tareas.sort((a, b) => (b.creado || "").localeCompare(a.creado || "")).slice(0, 15).map(t => h("a", { class: "tarjeta fila", href: `#/obra/${id}/sst/tarea/${t.id}` },
@@ -538,6 +600,7 @@ export async function rutaSST(id, p) {
   if (a === "personal") return vistaPersonalSST(id);
   if (a === "trab") return vistaTrabajador(id, b);
   if (a === "emergencias") return vistaEmergencias(id);
+  if (a === "analisis") { const o = await C.db.uno("obras", id); if (!o.sst?.analisisVisto) { o.sst = o.sst || {}; o.sst.analisisVisto = true; await C.db.guardar("obras", o); } return vistaAnalisis(id); }
   if (a === "r") return vistaRegistro(id, b);
   if (a === "tarea") return b === "nueva" ? vistaNuevaTarea(id) : vistaTarea(id, b);
   if (a === "nuevo") return crearRegistro(id, b);
