@@ -203,3 +203,14 @@ a.cifra span{color:var(--navy)}
 .hoja .t-sub{overflow-wrap:anywhere}
 .avisos{font-weight:500;font-size:13.5px;display:block}
 .avisos p{margin:4px 0}
+.tarjeta.material{display:flex;flex-direction:column;gap:10px}
+.tarjeta.material.agotado{border-color:var(--red)}
+.mat-link{color:inherit;text-decoration:none;display:block}
+.mat-queda{font-size:14px;color:var(--muted);margin-top:4px}
+.mat-queda b{font-size:24px;color:var(--navy)}
+@media (prefers-color-scheme: dark){.mat-queda b{color:#E7ECF5}}
+.mat-acc{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tarjeta.mov.sal{border-left:4px solid var(--green)}
+.tarjeta.mov.ent{border-left:4px solid var(--navy-2)}
+.al-almacen{background:var(--green-soft)}
+.form [hidden]{display:none}

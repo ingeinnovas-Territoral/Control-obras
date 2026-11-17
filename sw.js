@@ -1,5 +1,5 @@
 // Guarda la app en el celular para que abra sin internet.
-const VERSION = "obras-v19";
+const VERSION = "obras-v21";
 const ARCHIVOS = ["./", "index.html", "css/app.css", "js/app.js", "js/db.js", "js/vendor/xlsx.full.min.js", "js/vendor/jszip.min.js", "js/contrato.js", "js/miexcel.js", "js/informe.js", "js/vendor/jspdf.umd.min.js", "js/vendor/jspdf.plugin.autotable.min.js", "icons/logo-flassservic.png", "icons/logo-ingeinnova.png", "js/vendor/pdf.min.mjs", "js/vendor/pdf.worker.min.mjs",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(ARCHIVOS))); self.skipWaiting(); });

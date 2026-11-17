@@ -159,7 +159,7 @@ async function vistaInicio() {
 async function borrarObra(id, nombre) {
   const r = prompt(`Va a borrar la obra "${nombre || "sin nombre"}" con toda su bitácora, avances y fotos. No se puede deshacer.\n\nSi está seguro, escriba BORRAR`);
   if ((r || "").trim().toUpperCase() !== "BORRAR") { if (r !== null) toast("No se borró: debe escribir BORRAR"); return false; }
-  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
+  for (const s of ["items", "personal", "bitacora", "avances", "fotos", "gastos", "contratos", "materiales", "movimientos", "documentos"]) for (const x of await db.deObra(s, id)) await db.borrar(s, x.id);
   await db.borrar("obras", id); toast("Obra borrada"); return true;
 }
 
@@ -276,7 +276,8 @@ async function vistaResumen(id) {
       h("button", { class: "tile verde", onclick: () => tomarFotos(id) }, ico("camara"), "Foto rápida"),
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/avance/nuevo`) }, ico("avance"), "Registrar avance"),
       h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/gastos/nuevo`) }, ico("plata"), "Registrar gasto"),
-      h("button", { class: "tile claro ancho", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?")),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/almacen`) }, ico("obra"), "Almacén"),
+      h("button", { class: "tile claro", onclick: () => ir(`#/obra/${id}/tablero`) }, ico("avance"), "Tablero · ¿cómo va la plata?")),
     d.items.length ? h("a", { class: "tarjeta fila", href: `#/obra/${id}/avance`, onclick: () => { filtroItems = "sin"; } },
       h("div", {}, h("div", { class: "t-nom" }, `${d.items.filter(i => !(d.ejec[i.id] > 0)).length} de ${d.items.length} ítems sin iniciar`), h("div", { class: "t-sub" }, "Ver los ítems que no llevan ejecución")),
       ico("avance")) : null,
@@ -326,6 +327,8 @@ async function vistaDia(id, fecha) {
   const avDia = d.avances.filter(a => a.fecha === fecha);
   const foDia = d.fotos.filter(f => f.fecha === fecha);
   const gaDia = (await db.deObra("gastos", id)).filter(g => g.fecha === fecha);
+  const alm = await datosAlmacen(id); const matPorId = new Map(alm.materiales.map(m => [m.id, m])); const itsPorId = new Map(d.items.map(i => [i.id, i]));
+  const movDia = alm.movimientos.filter(v => v.fecha === fecha);
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault();
       const fd = new FormData(form);
@@ -363,6 +366,11 @@ async function vistaDia(id, fecha) {
     h("section", {}, h("h2", {}, "Fotos de este día"),
       foDia.length ? galeria(foDia, id) : h("div", { class: "nota" }, "Sin fotos este día."),
       h("button", { class: "btn sec", onclick: () => tomarFotos(id, { fecha }) }, ico("camara"), "Tomar fotos de este día")),
+    h("section", {}, h("h2", {}, "Almacén: materiales de este día"),
+      movDia.length ? movDia.map(v => filaMovimiento(v, matPorId.get(v.materialId), id, itsPorId)) : h("div", { class: "nota" }, "Sin movimientos de almacén este día."),
+      h("div", { class: "fila2" },
+        h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/salida/${fecha}`) }, "− Se gastó"),
+        h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/entrada/${fecha}`) }, "+ Entró"))),
     h("section", {}, h("h2", {}, "Gastos de este día"),
       gaDia.length ? gaDia.map(g => filaGasto(g, id)) : h("div", { class: "nota" }, "Sin gastos este día."),
       h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/gastos/nuevo/${fecha}`) }, ico("plata"), "Registrar gasto de este día")),
@@ -630,6 +638,12 @@ async function vistaFormGasto(id, gId, fechaIni) {
   const g = gId !== "nuevo" ? await db.uno("gastos", gId) : { obraId: id, fecha: fechaIni || hoy(), tipo: "Materiales", inversionista: "", creado: new Date().toISOString() };
   if (!g) return ir(`#/obra/${id}/gastos`);
   let soporte = g.soporte || null;
+  const almG = gId === "nuevo" ? await datosAlmacen(id) : null;
+  const alAlmacen = almG ? h("details", { class: "aparte al-almacen" },
+    h("summary", {}, "¿Este material entra al almacén de la obra?"),
+    h("p", { class: "nota" }, "Si lo llena, queda registrada la entrada en el almacén con la fecha del gasto."),
+    campoMaterial(almG.materiales, "", "a_"),
+    h("label", { class: "campo" }, h("span", {}, "Cantidad que entra"), h("input", { name: "a_cantidad", inputmode: "decimal", placeholder: "Ej. 20" }))) : null;
   if (contratoPre) { g.contratoId = contratoPre; contratoPre = null; }
   const contratos = (await db.deObra("contratos", id)).sort((a, b) => a.numero - b.numero);
   const nuevoC = h("div", { class: "nuevo-contrato", hidden: true }, h("p", { class: "nota" }, "Se crea el contrato con este abono. Llene sus datos:"), camposContrato({ tipo: "Mano de obra" }));
@@ -657,7 +671,12 @@ async function vistaFormGasto(id, gId, fechaIni) {
         if (!g.proveedor) g.proveedor = c.contratista;
       } else if (cSel) g.contratoId = cSel; else delete g.contratoId;
       g.soporte = soporte || undefined;
-      await db.guardar("gastos", g); toast("Gasto guardado"); history.back();
+      const aCant = Number(String(fd.get("a_cantidad") || "").replace(",", ".")) || 0;
+      const aMat = almG && aCant > 0 ? await materialDeFormulario(id, fd, almG.materiales, "a_") : null;
+      if (almG && aCant > 0 && !aMat) return alert("Para la entrada al almacén elija el material o escriba el nombre del nuevo.");
+      await db.guardar("gastos", g);
+      if (aMat) await db.guardar("movimientos", { obraId: id, tipo: "entrada", materialId: aMat.id, cantidad: aCant, fecha: g.fecha, detalle: g.proveedor || g.detalle || "", gastoId: g.id, creado: new Date().toISOString() });
+      toast(aMat ? "Gasto guardado y material en el almacén" : "Gasto guardado"); history.back();
     } },
     h("div", { class: "fila2" },
       h("label", { class: "campo" }, h("span", {}, "Fecha"), h("input", { type: "date", name: "fecha", value: g.fecha, required: true })),
@@ -673,6 +692,7 @@ async function vistaFormGasto(id, gId, fechaIni) {
     nuevoC,
     h("label", { class: "campo" }, h("span", {}, "Ítem del presupuesto (opcional)"),
       h("select", { name: "item" }, h("option", { value: "" }, "— Ninguno —"), d.items.map(it => h("option", { selected: g.item === etiquetaItem(it) }, etiquetaItem(it))))),
+    alAlmacen,
     h("label", { class: "btn sec" }, ico("camara"), "Foto de la factura o soporte",
       h("input", { type: "file", accept: "image/*", hidden: true, onchange: async e => { const f = e.target.files[0]; if (f) { soporte = await comprimir(f); pintarSop(); } } })),
     vistaSop,
@@ -793,6 +813,189 @@ async function vistaFormContrato(id, cId) {
 }
 let contratoPre = null;
 
+// ------------------------------------------------------------------ OBRA: almacén de obra
+const UNIDADES = ["bulto", "unidad", "m³", "m²", "m", "kg", "galón", "caneca", "litro", "varilla", "lámina", "rollo", "caja", "paquete", "viaje", "global"];
+let almFiltro = "", movPre = null;
+async function datosAlmacen(id) {
+  const [materiales, movimientos] = await Promise.all([db.deObra("materiales", id), db.deObra("movimientos", id)]);
+  materiales.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  const st = {};
+  for (const m of materiales) st[m.id] = { entro: 0, gasto: 0 };
+  for (const v of movimientos) { const x = st[v.materialId]; if (!x) continue; x[v.tipo === "salida" ? "gasto" : "entro"] += Number(v.cantidad) || 0; }
+  const filas = materiales.map(m => { const x = st[m.id]; const queda = Math.round((x.entro - x.gasto) * 1000) / 1000;
+    const estado = queda < 0 ? ["Salió más de lo que entró", "mal"] : queda === 0 ? (x.entro ? ["Agotado", "mal"] : ["Sin entradas", "info"]) : (Number(m.minimo) && queda <= Number(m.minimo) ? ["Por agotarse", "ojo"] : ["Hay", "bien"]);
+    return { m, ...x, queda, estado }; });
+  return { materiales, movimientos, filas };
+}
+const cant = (n, und) => `${num(n, 3)} ${und || ""}`.trim();
+function tarjetaMaterial(f, id) {
+  return h("div", { class: "tarjeta material" + (f.queda <= 0 && f.entro ? " agotado" : "") },
+    h("a", { class: "mat-link", href: `#/obra/${id}/almacen/m/${f.m.id}` },
+      h("div", { class: "g-top" }, h("div", { class: "t-nom" }, f.m.nombre), h("span", { class: "est " + f.estado[1] }, f.estado[0])),
+      h("div", { class: "mat-queda" }, h("b", {}, num(f.queda, 3)), " ", f.m.und || "", h("span", {}, " quedan")),
+      h("div", { class: "t-sub" }, `Entró ${cant(f.entro, f.m.und)} · se gastó ${cant(f.gasto, f.m.und)}`),
+      f.entro ? h("div", { class: "prog" }, h("div", { style: `width:${Math.max(0, Math.min(100, f.queda / f.entro * 100))}%` })) : null),
+    h("div", { class: "mat-acc" },
+      h("button", { class: "btn mini verde", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/salida`); } }, "− Se gastó"),
+      h("button", { class: "btn mini sec", onclick: () => { movPre = f.m.id; ir(`#/obra/${id}/almacen/mov/nuevo/entrada`); } }, "+ Entró")));
+}
+async function vistaAlmacen(id) {
+  const d = await cargarObra(id); const k = await datosAlmacen(id);
+  const lista = h("div", { class: "acciones" });
+  const buscar = h("input", { type: "search", placeholder: "Buscar material…", value: almFiltro, oninput: () => { almFiltro = buscar.value; pintar(); } });
+  const pintar = () => {
+    lista.innerHTML = "";
+    const q = almFiltro.toLowerCase().trim();
+    const fs = k.filas.filter(f => !q || f.m.nombre.toLowerCase().includes(q));
+    if (!fs.length) lista.append(h("div", { class: "vacio" }, k.filas.length ? "Ningún material coincide." : "Todavía no hay materiales. Registre lo que entra a la obra."));
+    for (const f of fs) lista.append(tarjetaMaterial(f, id));
+  };
+  pintar();
+  const agotados = k.filas.filter(f => f.estado[1] === "mal").length, bajos = k.filas.filter(f => f.estado[1] === "ojo").length;
+  pantalla("Almacén de obra", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
+    h("div", { class: "mosaico" },
+      h("button", { class: "tile", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/entrada`) }, ico("bajar"), "Entró material"),
+      h("button", { class: "tile verde", onclick: () => ir(`#/obra/${id}/almacen/mov/nuevo/salida`) }, ico("subir"), "Se gastó material")),
+    h("div", { class: "kpis" }, kpi("Materiales", k.filas.length, `${k.movimientos.length} movimiento(s)`),
+      kpi("Atención", agotados + bajos, `${agotados} agotado(s) · ${bajos} por agotarse`)),
+    buscar, lista,
+    h("button", { class: "btn sec", onclick: () => ir(`#/obra/${id}/almacen/m/nuevo`) }, ico("sumar"), "Agregar material sin movimiento"),
+    k.filas.length ? h("button", { class: "btn sec", onclick: () => exportarAlmacen(id) }, ico("excel"), "Exportar inventario (Excel)") : null,
+    tabs(id, "resumen"));
+}
+function filaMovimiento(v, mat, id, itemsPorId) {
+  const sal = v.tipo === "salida", it = itemsPorId?.get(v.itemId);
+  return h("a", { class: "tarjeta mov " + (sal ? "sal" : "ent"), href: `#/obra/${id}/almacen/mov/${v.id}` },
+    h("div", { class: "g-top" }, h("div", { class: "t-nom" }, (sal ? "− " : "+ ") + cant(v.cantidad, mat?.und) + (mat ? " · " + mat.nombre : "")), h("span", { class: "t-sub" }, fechaCorta(v.fecha))),
+    h("div", { class: "t-sub" }, [sal ? "Se gastó" : "Entró", v.detalle, it ? etiquetaItem(it) : "", v.gastoId ? "desde un gasto" : ""].filter(Boolean).join(" · ")));
+}
+async function vistaMaterial(id, mId) {
+  const d = await cargarObra(id); const k = await datosAlmacen(id);
+  const m = mId === "nuevo" ? { obraId: id, und: "bulto", creado: new Date().toISOString() } : k.materiales.find(x => x.id === mId);
+  if (!m) return ir(`#/obra/${id}/almacen`);
+  const f = k.filas.find(x => x.m.id === m.id);
+  const movs = k.movimientos.filter(v => v.materialId === m.id).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || (b.creado || "").localeCompare(a.creado || ""));
+  const its = new Map(d.items.map(i => [i.id, i]));
+  const form = h("form", { class: "form", onsubmit: async ev => {
+      ev.preventDefault(); const fd = new FormData(form);
+      m.nombre = (fd.get("nombre") || "").trim(); m.und = (fd.get("und") || "").trim(); m.minimo = Number(String(fd.get("minimo") || "").replace(",", ".")) || "";
+      if (!m.nombre) return alert("Escriba el nombre del material.");
+      if (k.materiales.some(x => x.id !== m.id && x.nombre.toLowerCase() === m.nombre.toLowerCase())) return alert("Ya hay un material con ese nombre.");
+      await db.guardar("materiales", m); toast("Material guardado"); ir(`#/obra/${id}/almacen`);
+    } },
+    h("label", { class: "campo" }, h("span", {}, "Material"), h("input", { name: "nombre", value: m.nombre || "", placeholder: "Cemento gris 50 kg", required: true })),
+    h("div", { class: "fila2" },
+      h("label", { class: "campo" }, h("span", {}, "Unidad"), h("input", { name: "und", value: m.und || "", list: "lista-und" })),
+      h("label", { class: "campo" }, h("span", {}, "Avisar cuando queden"), h("input", { name: "minimo", inputmode: "decimal", value: m.minimo ?? "", placeholder: "opcional" }))),
+    h("datalist", { id: "lista-und" }, UNIDADES.map(u => h("option", { value: u }))),
+    h("button", { class: "btn grande", type: "submit" }, "Guardar material"));
+  pantalla(mId === "nuevo" ? "Nuevo material" : m.nombre, { atras: `#/obra/${id}/almacen`, subtitulo: d.obra.nombre },
+    f ? h("div", { class: "kpis" }, kpi("Quedan", cant(f.queda, m.und), f.estado[0]), kpi("Entró / se gastó", `${num(f.entro, 3)} / ${num(f.gasto, 3)}`, m.und || "")) : null,
+    f ? h("div", { class: "mosaico" },
+      h("button", { class: "tile verde", onclick: () => { movPre = m.id; ir(`#/obra/${id}/almacen/mov/nuevo/salida`); } }, ico("subir"), "Se gastó"),
+      h("button", { class: "tile", onclick: () => { movPre = m.id; ir(`#/obra/${id}/almacen/mov/nuevo/entrada`); } }, ico("bajar"), "Entró")) : null,
+    form,
+    f ? h("section", {}, h("h2", {}, `Movimientos (${movs.length})`),
+      movs.length ? movs.map(v => filaMovimiento(v, m, id, its)) : h("div", { class: "nota" }, "Sin movimientos.")) : null,
+    f ? h("button", { class: "btn peligro", onclick: async () => {
+      if (!confirm(movs.length ? `¿Borrar "${m.nombre}" y sus ${movs.length} movimiento(s)?` : `¿Borrar "${m.nombre}"?`)) return;
+      for (const v of movs) await db.borrar("movimientos", v.id);
+      await db.borrar("materiales", m.id); ir(`#/obra/${id}/almacen`); } }, "Borrar material") : null);
+}
+// campos para elegir o crear un material (se usan en el movimiento y en el gasto)
+function campoMaterial(materiales, selId, prefijo = "") {
+  const nuevo = h("div", { class: "fila2", hidden: true },
+    h("label", { class: "campo" }, h("span", {}, "Nombre del material nuevo"), h("input", { name: prefijo + "mat_nombre", placeholder: "Cemento gris 50 kg" })),
+    h("label", { class: "campo" }, h("span", {}, "Unidad"), h("input", { name: prefijo + "mat_und", list: "lista-und", value: "bulto" })));
+  const sel = h("select", { name: prefijo + "materialId", onchange: () => { nuevo.hidden = sel.value !== "+nuevo"; } },
+    h("option", { value: "" }, "— Elija el material —"),
+    materiales.map(m => h("option", { value: m.id, selected: m.id === selId }, `${m.nombre} (${m.und || "und"})`)),
+    h("option", { value: "+nuevo", selected: !materiales.length && !selId }, "+ MATERIAL NUEVO"));
+  if (!materiales.length && !selId) nuevo.hidden = false;
+  return h("div", { class: "form" }, h("label", { class: "campo" }, h("span", {}, "Material"), sel), nuevo,
+    h("datalist", { id: "lista-und" }, UNIDADES.map(u => h("option", { value: u }))));
+}
+async function materialDeFormulario(id, fd, materiales, prefijo = "") {
+  const sel = fd.get(prefijo + "materialId");
+  if (sel && sel !== "+nuevo") return materiales.find(m => m.id === sel);
+  if (sel !== "+nuevo") return null;
+  const nombre = (fd.get(prefijo + "mat_nombre") || "").trim(); if (!nombre) return null;
+  const ya = materiales.find(m => m.nombre.toLowerCase() === nombre.toLowerCase()); if (ya) return ya;
+  return db.guardar("materiales", { obraId: id, nombre, und: (fd.get(prefijo + "mat_und") || "").trim(), creado: new Date().toISOString() });
+}
+async function vistaMovimiento(id, movId, tipoIni, fechaIni) {
+  const d = await cargarObra(id); const k = await datosAlmacen(id);
+  const v = movId !== "nuevo" ? k.movimientos.find(x => x.id === movId) : { obraId: id, tipo: tipoIni === "salida" ? "salida" : "entrada", fecha: fechaIni || hoy(), materialId: movPre || "", creado: new Date().toISOString() };
+  movPre = null;
+  if (!v) return ir(`#/obra/${id}/almacen`);
+  let tipo = v.tipo;
+  const info = h("div", { class: "nota" });
+  const camposSal = h("div", { class: "form" },
+    h("label", { class: "campo" }, h("span", {}, "¿En qué ítem se gastó? (opcional)"),
+      h("select", { name: "itemId" }, h("option", { value: "" }, "— Ninguno —"), d.items.map(it => h("option", { value: it.id, selected: v.itemId === it.id }, etiquetaItem(it))))));
+  const det = h("input", { name: "detalle", value: v.detalle || "" });
+  const lblDet = h("span", {});
+  const btnE = h("button", { type: "button", class: "chip" }, "+ Entró"), btnS = h("button", { type: "button", class: "chip" }, "− Se gastó");
+  const pintarTipo = () => {
+    btnE.className = "chip" + (tipo === "entrada" ? " activa" : ""); btnS.className = "chip" + (tipo === "salida" ? " activa" : "");
+    camposSal.hidden = tipo !== "salida";
+    lblDet.textContent = tipo === "salida" ? "Frente / quién lo recibió (opcional)" : "Proveedor / remisión (opcional)";
+    det.placeholder = tipo === "salida" ? "Pañete muro norte, maestro Juan…" : "Ferretería, remisión 123…";
+    pintarInfo();
+  };
+  btnE.onclick = () => { tipo = "entrada"; pintarTipo(); }; btnS.onclick = () => { tipo = "salida"; pintarTipo(); };
+  const campoMat = campoMaterial(k.materiales, v.materialId);
+  const pintarInfo = () => {
+    const f = k.filas.find(x => x.m.id === campoMat.querySelector("select").value);
+    info.textContent = f ? `En el almacén quedan ${cant(f.queda, f.m.und)}.` : "";
+  };
+  campoMat.querySelector("select").addEventListener("change", pintarInfo);
+  const form = h("form", { class: "form", onsubmit: async ev => {
+      ev.preventDefault(); const fd = new FormData(form);
+      const m = await materialDeFormulario(id, fd, k.materiales);
+      if (!m) return alert("Elija el material o escriba el nombre del material nuevo.");
+      const c = Number(String(fd.get("cantidad") || "").replace(",", ".")) || 0;
+      if (!(c > 0)) return alert("Escriba la cantidad.");
+      if (tipo === "salida") {
+        const f = k.filas.find(x => x.m.id === m.id);
+        const disp = (f ? f.queda : 0) + (movId !== "nuevo" && v.tipo === "salida" && v.materialId === m.id ? Number(v.cantidad) || 0 : 0);
+        if (c > disp + 1e-9 && !confirm(`En el almacén solo quedan ${cant(disp, m.und)} y va a sacar ${cant(c, m.und)}. ¿Registrar de todas formas?`)) return;
+      }
+      Object.assign(v, { tipo, materialId: m.id, cantidad: c, fecha: fd.get("fecha"), detalle: (fd.get("detalle") || "").trim(), itemId: tipo === "salida" ? fd.get("itemId") || "" : "" });
+      await db.guardar("movimientos", v); toast(tipo === "salida" ? "Salida registrada" : "Entrada registrada"); history.back();
+    } },
+    h("div", { class: "chips" }, btnE, btnS),
+    campoMat, info,
+    h("div", { class: "fila2" },
+      h("label", { class: "campo" }, h("span", {}, "Cantidad"), h("input", { name: "cantidad", inputmode: "decimal", value: v.cantidad ?? "", required: true })),
+      h("label", { class: "campo" }, h("span", {}, "Fecha"), h("input", { type: "date", name: "fecha", value: v.fecha, required: true }))),
+    camposSal,
+    h("label", { class: "campo" }, lblDet, det),
+    h("button", { class: "btn grande", type: "submit" }, "Guardar"));
+  pintarTipo();
+  pantalla(movId === "nuevo" ? "Movimiento de almacén" : "Editar movimiento", { atras: `#/obra/${id}/almacen`, subtitulo: d.obra.nombre }, form,
+    v.gastoId ? h("a", { class: "btn sec", href: `#/obra/${id}/gastos/${v.gastoId}` }, ico("plata"), "Ver el gasto de esta compra") : null,
+    movId !== "nuevo" ? h("button", { class: "btn peligro", onclick: async () => {
+      if (!confirm("¿Borrar este movimiento?")) return; await db.borrar("movimientos", v.id); history.back(); } }, "Borrar movimiento") : null);
+}
+async function exportarAlmacen(id) {
+  const d = await cargarObra(id); const k = await datosAlmacen(id);
+  const mats = new Map(k.materiales.map(m => [m.id, m])), its = new Map(d.items.map(i => [i.id, i]));
+  const fecha = s => { if (!s) return ""; const [y, m, dd] = s.split("-").map(Number); return { t: "n", v: (Date.UTC(y, m - 1, dd) - Date.UTC(1899, 11, 30)) / 864e5, z: "dd/mm/yyyy" }; };
+  const inv = [["MATERIAL", "UND", "ENTRÓ", "SE GASTÓ", "QUEDA", "AVISAR EN", "ESTADO"], ...k.filas.map(f => [f.m.nombre, f.m.und || "", f.entro, f.gasto, f.queda, f.m.minimo || "", f.estado[0]])];
+  const mov = [["FECHA", "MATERIAL", "UND", "MOVIMIENTO", "CANTIDAD", "DETALLE", "ÍTEM DEL PRESUPUESTO"],
+    ...k.movimientos.slice().sort((a, b) => (a.fecha || "").localeCompare(b.fecha || "") || (a.creado || "").localeCompare(b.creado || "")).map(v => {
+      const m = mats.get(v.materialId) || {}; const it = its.get(v.itemId);
+      return [fecha(v.fecha), m.nombre || "", m.und || "", v.tipo === "salida" ? "Se gastó" : "Entró", Number(v.cantidad) || 0, v.detalle || "", it ? etiquetaItem(it) : ""]; })];
+  const wb = XLSX.utils.book_new();
+  const hoja = (aoa, anchos) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws["!cols"] = anchos.map(w => ({ wch: w })); return ws; };
+  XLSX.utils.book_append_sheet(wb, hoja(inv, [36, 10, 10, 10, 10, 10, 14]), "INVENTARIO");
+  XLSX.utils.book_append_sheet(wb, hoja(mov, [11, 36, 10, 12, 10, 36, 50]), "MOVIMIENTOS");
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  await entregarArchivo(new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+    `Almacén ${(d.obra.contrato || d.obra.nombre || "").toString().replace(/[\\/:*?"<>|]/g, "").slice(0, 40)} ${hoy()}.xlsx`);
+}
+
 // ------------------------------------------------------------------ OBRA: mi Excel de control al día
 // Solo se guarda un Excel base por obra: el nuevo reemplaza al anterior.
 async function guardarPlantilla(id, nombre, blob) {
@@ -896,6 +1099,7 @@ async function vistaMas(id) {
   const base = await plantillaDe(id);
   pantalla("Más", { atras: `#/obra/${id}/resumen`, subtitulo: d.obra.nombre },
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/tablero` }, h("div", { class: "t-nom" }, "Tablero · ¿cómo va la plata?"), h("div", { class: "t-sub" }, "Avance, gasto, utilidad e inversionistas")),
+    h("a", { class: "tarjeta menu", href: `#/obra/${id}/almacen` }, h("div", { class: "t-nom" }, "Almacén de obra"), h("div", { class: "t-sub" }, "Qué hay, cuánto queda, qué entró y qué se gastó")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/presupuesto` }, h("div", { class: "t-nom" }, "Presupuesto"), h("div", { class: "t-sub" }, d.items.length ? `${d.items.length} ítems · costo directo ${pesos(d.cd)}` : "Sin cargar")),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/personal` }, h("div", { class: "t-nom" }, "Personal"), h("div", { class: "t-sub" }, `${d.personal.length} persona(s)`)),
     h("a", { class: "tarjeta menu", href: `#/obra/${id}/datos` }, h("div", { class: "t-nom" }, "Datos de la obra"), h("div", { class: "t-sub" }, [d.obra.contrato, d.obra.entidad].filter(Boolean).join(" · ") || "Contrato, entidad, plazo…")),
@@ -1261,6 +1465,7 @@ async function rutear() {
       if (v === "foto") return await vistaFoto(id, p[3]);
       if (v === "mas") return await vistaMas(id);
       if (v === "tablero") return await vistaTablero(id);
+      if (v === "almacen") return p[3] === "m" ? await vistaMaterial(id, p[4]) : p[3] === "mov" ? await vistaMovimiento(id, p[4], p[5], p[6]) : await vistaAlmacen(id);
       if (v === "contratos") return p[3] ? await vistaFormContrato(id, p[3]) : await vistaContratos(id);
       if (v === "gastos") return p[3] ? await vistaFormGasto(id, p[3], p[4]) : await vistaGastos(id);
       if (v === "presupuesto") return await vistaPresupuesto(id);
