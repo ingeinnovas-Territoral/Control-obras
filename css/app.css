@@ -331,3 +331,5 @@ fieldset.marcas .chk input{width:20px;height:20px}
 .checklist .fm-nom{white-space:normal;overflow:visible;text-overflow:clip}
 a.fila-mat{color:inherit;text-decoration:none}
 button.tarjeta{width:100%;text-align:left;font:inherit;cursor:pointer}
+.revision-items{max-height:45vh;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.revision-items .fm-nom{white-space:normal}

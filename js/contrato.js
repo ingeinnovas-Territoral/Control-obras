@@ -131,3 +131,99 @@ export function extraerDatos(texto) {
   return r;
 }
 function capital(s) { return s.toLowerCase().replace(/(^|\s)\S/g, x => x.toUpperCase()); }
+
+// ------------------------------------------------------------------ tablas de presupuesto en Word o PDF (cotizaciones, órdenes)
+// Devuelve filas de celdas como si fuera una hoja de Excel, para leerlas con el mismo lector del presupuesto.
+export async function filasDocumento(file) {
+  const nombre = (file.name || "").toLowerCase();
+  const buf = await file.arrayBuffer();
+  if (nombre.endsWith(".docx")) return filasDOCX(buf);
+  if (nombre.endsWith(".pdf") || file.type === "application/pdf") return await filasPDF(buf);
+  throw new Error("Use un archivo PDF o Word (.docx).");
+}
+
+function filasDOCX(buf) {
+  const zip = XLSX.CFB.read(new Uint8Array(buf), { type: "array" });
+  const ent = XLSX.CFB.find(zip, "word/document.xml") || XLSX.CFB.find(zip, "/word/document.xml");
+  if (!ent) throw new Error("No pude leer el documento de Word.");
+  const doc = new DOMParser().parseFromString(new TextDecoder().decode(ent.content), "application/xml");
+  const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const hijos = (el, n) => [...el.childNodes].filter(x => x.localName === n);
+  const texto = el => [...el.getElementsByTagNameNS(W, "p")].map(p => [...p.getElementsByTagNameNS(W, "t")].map(t => t.textContent).join("")).filter(Boolean).join(" ");
+  const filas = [];
+  for (const tbl of doc.getElementsByTagNameNS(W, "tbl")) {
+    if (tbl.parentNode.closest?.("tbl")) continue;
+    for (const tr of hijos(tbl, "tr")) {
+      const fila = [];
+      for (const tc of hijos(tr, "tc")) {
+        const span = Number(tc.getElementsByTagNameNS(W, "gridSpan")[0]?.getAttribute("w:val")) || 1;
+        fila.push(texto(tc).replace(/\s+/g, " ").trim()); for (let k = 1; k < span; k++) fila.push("");
+      }
+      filas.push(fila);
+    }
+    filas.push([]);
+  }
+  return filas;
+}
+
+async function filasPDF(buf) {
+  const pdfjs = await import("./vendor/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdf.worker.min.mjs", import.meta.url).href;
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+  const sinT = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  let cols = null;                       // centros x de las columnas (de la fila de títulos)
+  const filas = [];
+  for (let p = 1; p <= Math.min(pdf.numPages, 40); p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    // 1) renglones por altura
+    const piezas = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ s: it.str.trim(), x: it.transform[4], y: it.transform[5], w: it.width, h: Math.abs(it.transform[3]) || 8 }));
+    piezas.sort((a, b) => b.y - a.y || a.x - b.x);
+    const lineas = [];
+    for (const pz of piezas) {
+      const l = lineas.find(l => Math.abs(l.y - pz.y) < Math.max(2.5, pz.h * 0.35));
+      if (l) l.p.push(pz); else lineas.push({ y: pz.y, p: [pz] });
+    }
+    lineas.sort((a, b) => b.y - a.y);
+    for (const l of lineas) l.p.sort((a, b) => a.x - b.x);
+    // 2) fila de títulos
+    let desde = 0;
+    const iH = lineas.findIndex(l => { const t = sinT(l.p.map(x => x.s).join(" ")); return /\bcant/.test(t) && /(descrip|detalle|actividad|concepto)/.test(t); });
+    if (iH >= 0) {
+      const tit = [];                         // une palabras de un mismo título (p. ej. "VALOR UNITARIO")
+      for (const pz of lineas[iH].p) { const u = tit[tit.length - 1]; if (u && pz.x - (u.x + u.w) < 4) { u.s += " " + pz.s; u.w = pz.x + pz.w - u.x; } else tit.push({ ...pz }); }
+      cols = tit.map(t => ({ s: t.s, c: t.x + t.w / 2, x0: t.x, x1: t.x + t.w }));
+      filas.push(cols.map(c => c.s)); desde = iH + 1;
+    }
+    if (!cols) continue;
+    const iD = cols.findIndex(c => /(descrip|detalle|actividad|concepto)/.test(sinT(c.s)));
+    const colDe = pz => {                      // columna: la descripción ocupa todo su ancho; lo demás va al título más cercano
+      const cx = pz.x + pz.w / 2;
+      const d = cols[iD];
+      if (iD >= 0 && pz.x >= (cols[iD - 1]?.x1 ?? -1e9) - 2 && pz.x + pz.w <= (cols[iD + 1]?.x0 ?? 1e9) + 2 && pz.w > 25) return iD;
+      let k = 0; for (let j = 1; j < cols.length; j++) if (Math.abs(cols[j].c - cx) < Math.abs(cols[k].c - cx)) k = j;
+      return k;
+    };
+    // 3) celdas por renglón
+    const filasPag = lineas.slice(desde).map(l => {
+      const f = cols.map(() => []);
+      for (const pz of l.p) f[colDe(pz)].push(pz.s);
+      return { y: l.y, h: Math.max(...l.p.map(x => x.h)), c: f.map(x => x.join(" ").replace(/\$\s+/g, "$").trim()) };
+    });
+    // 4) las descripciones partidas en varios renglones se unen al renglón del ítem más cercano
+    const esNum = s => /\d/.test(s) && /^[\s$\d.,%-]+$/.test(s);
+    const anclas = filasPag.filter(f => f.c.some((v, j) => j !== iD && v && (esNum(v) || /^\d+(\.\d+)*$/.test(v))));
+    const solos = filasPag.filter(f => !anclas.includes(f) && f.c.every((v, j) => j === iD || !v));
+    for (const f of solos) {
+      let mejor = null, dist = 1e9;
+      for (const a of anclas) { const dd = Math.abs(a.y - f.y); if (dd < dist) { dist = dd; mejor = a; } }
+      if (mejor && dist < f.h * 2.6) (mejor.extra ||= []).push(f);
+    }
+    for (const a of anclas) {
+      if (a.extra) { const partes = [...a.extra, a].sort((x, y) => y.y - x.y).map(x => x.c[iD]).filter(Boolean); a.c[iD] = partes.join(" "); }
+      filas.push(a.c);
+    }
+    // los renglones de totales (COSTO DIRECTO, VALOR TOTAL) quedan como anclas con el texto en otra columna
+  }
+  return filas;
+}

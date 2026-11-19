@@ -1,6 +1,6 @@
 // Control de Obras — app de campo (funciona sin internet).
 import * as db from "./db.js";
-import { extraerTexto, extraerDatos } from "./contrato.js";
+import { extraerTexto, extraerDatos, filasDocumento } from "./contrato.js";
 import { llenarExcel, leerBase } from "./miexcel.js";
 import { informeGastosPDF } from "./informe.js";
 import { iniciarSST, rutaSST, habilitacion, pendientesInicio } from "./sst.js";
@@ -182,7 +182,7 @@ async function vistaDatosObra(id) {
   const o = id ? await db.uno("obras", id) : { empresa: "FLASSSERVIC S.A.S.", inicio: hoy(), plazo: 60 };
   const campo = (lab, name, tipo = "text", extra = {}) =>
     h("label", { class: "campo" }, h("span", {}, lab), h("input", { name, type: tipo, value: o[name] ?? "", ...extra }));
-  let docPendiente = null;
+  let docPendiente = null, itemsPendientes = null;
   const revision = h("div", { class: "revision" });
   const form = h("form", { class: "form", onsubmit: async ev => {
       ev.preventDefault();
@@ -196,10 +196,16 @@ async function vistaDatosObra(id) {
       if (!o.creado) o.creado = new Date().toISOString();
       await db.guardar("obras", o);
       if (docPendiente) { docPendiente.obraId = o.id; await db.guardar("documentos", docPendiente); }
+      // presupuesto leído de la cotización u orden: se carga si la obra todavía no tiene ítems
+      if (itemsPendientes && !(await db.deObra("items", o.id)).length) {
+        itemsPendientes.items.forEach((it, k) => { it.orden = k; });
+        await db.reemplazarDeObra("items", o.id, itemsPendientes.items);
+        if (itemsPendientes.total) { o.totalPresupuesto = itemsPendientes.total; await db.guardar("obras", o); }
+      }
       toast("Obra guardada");
       ir(`#/obra/${o.id}/${id ? "mas" : "resumen"}`);
     } },
-    h("label", { class: "btn sec" }, "📄 Cargar contrato u orden de servicio (PDF o Word)",
+    h("label", { class: "btn sec" }, "📄 Cargar contrato, orden de servicio o cotización (PDF o Word)",
       h("input", { type: "file", hidden: true, accept: ".pdf,.docx,application/pdf", onchange: async e => {
         const f = e.target.files[0]; if (!f) return;
         revision.innerHTML = ""; revision.append(h("div", { class: "nota" }, "Leyendo el documento…"));
@@ -212,7 +218,27 @@ async function vistaDatosObra(id) {
             return;
           }
           const datos = extraerDatos(texto); docPendiente.datos = datos;
+          // ¿trae tabla de presupuesto? (cotización, orden con presupuesto)
+          itemsPendientes = null;
+          try { const r = leerPresupuesto(await filasDocumento(f)); if (r.items.length) itemsPendientes = r; } catch (err) { console.warn(err); }
+          const plano = texto.replace(/\s+/g, " ");
+          if (/cotizaci[oó]n|propuesta econ[oó]mica/i.test(plano)) {
+            docPendiente.tipo = "Cotización";
+            const asunto = texto.match(/asunto\s*:\s*([^\n]{8,300})/i);
+            if (asunto) datos.objeto = asunto[1].trim().replace(/^(cotizaci[oó]n|propuesta)(\s+(econ[oó]mica|a todo costo))?\s*(para|de|del|por)?\s*/i, "").replace(/^\w/, c => c.toUpperCase());
+            const sen = texto.match(/se[ñn]ores\s*,?\s*\n+\s*([^\n]{4,160})/i);
+            if (sen) datos.entidad = sen[1].trim();
+          }
+          for (const [emp, v] of Object.entries(EMPRESAS)) if (v.nit && plano.includes(v.nit)) { datos.empresa = emp; break; }
+          if (docPendiente.tipo === "Cotización") {
+            delete datos.fechaContrato;                       // la fecha de la cotización no es la firma del contrato
+            if (/H[EÉ]CTOR GONZALO SU[AÁ]REZ/i.test(plano)) datos.empresa = "FLASSSERVIC S.A.S.";
+            else if (/ANDR[EÉ]S DAVID CORREA/i.test(plano)) datos.empresa = "INGEINNOVA TERRITORIAL S.A.S.";
+          }
+          if (itemsPendientes?.total) datos.valor = itemsPendientes.total;
           mostrarRevision(datos);
+          if (itemsPendientes) revision.append(h("div", { class: "alerta ambar" }, ico("avance"),
+            `También encontré el presupuesto: ${itemsPendientes.items.length} ítems${itemsPendientes.total ? " por " + pesos(itemsPendientes.total) : ""}. Se cargan solos al crear la obra.`));
         } catch (err) { revision.innerHTML = ""; revision.append(h("div", { class: "alerta" }, err.message)); }
       } })),
     revision,
@@ -250,7 +276,7 @@ async function vistaDatosObra(id) {
         for (const c of revision.querySelectorAll("input[data-k]")) if (c.checked) {
           const el = form.elements[c.dataset.k]; if (el) el.value = c.dataset.v;
         }
-        revision.innerHTML = ""; revision.append(h("div", { class: "nota" }, "✔ Datos copiados. Revise el formulario y guarde."));
+        revision.innerHTML = ""; revision.append(h("div", { class: "nota" }, "✔ Datos copiados. Revise el formulario y guarde." + (itemsPendientes ? ` Al crear la obra se cargan los ${itemsPendientes.items.length} ítems del presupuesto.` : "")));
       } }, "Usar estos datos")));
   }
   pantalla(id ? "Datos de la obra" : "Nueva obra", { atras: id ? `#/obra/${id}/mas` : "#/" }, form);
@@ -1179,17 +1205,24 @@ async function vistaPresupuesto(id) {
   pantalla("Presupuesto", { atras: `#/obra/${id}/mas`, subtitulo: d.obra.nombre },
     h("details", { class: "aparte", open: !d.items.length },
       h("summary", {}, d.items.length ? "Volver a cargar el presupuesto" : "Cargar el presupuesto"),
-      h("p", { class: "nota" }, "Use el Excel de la entidad. El programa busca solo la fila de títulos (ÍTEM, DESCRIPCIÓN, UND, CANTIDAD, VALOR UNITARIO) y la fila VALOR TOTAL."),
-      h("label", { class: "btn" }, "Elegir archivo de Excel", h("input", { type: "file", hidden: true, accept: ".xlsx,.xls,.xlsm,.csv", onchange: async e => {
+      h("p", { class: "nota" }, "Sirve el Excel de la entidad, o si no lo tiene a la mano, la cotización o la orden en Word o PDF. El programa busca solo la tabla (ÍTEM, DESCRIPCIÓN, UND, CANTIDAD, VALOR UNITARIO) y el VALOR TOTAL."),
+      h("label", { class: "btn" }, ico("subir"), "Elegir Excel, Word o PDF", h("input", { type: "file", hidden: true, accept: ".xlsx,.xls,.xlsm,.csv,.docx,.pdf,application/pdf", onchange: async e => {
         const f = e.target.files[0]; if (!f) return;
-        const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
         let mejor = null;
-        for (const n of wb.SheetNames) {
-          const filas = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" });
-          const r = leerPresupuesto(filas); if (r.items.length && (!mejor || r.items.length > mejor.items.length)) mejor = r;
-        }
-        if (!mejor) return alert("No encontré ítems con descripción, cantidad y valor unitario en ese archivo.");
-        aplicarPresupuesto(id, d, mejor);
+        try {
+          if (/\.(docx|pdf)$/i.test(f.name) || f.type === "application/pdf") {
+            toast("Leyendo el documento…");
+            const r = leerPresupuesto(await filasDocumento(f)); if (r.items.length) mejor = r;
+          } else {
+            const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+            for (const n of wb.SheetNames) {
+              const filas = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: "" });
+              const r = leerPresupuesto(filas); if (r.items.length && (!mejor || r.items.length > mejor.items.length)) mejor = r;
+            }
+          }
+        } catch (err) { console.error(err); return alert("No pude leer ese archivo: " + err.message); }
+        if (!mejor) return alert("No encontré ítems con descripción, cantidad y valor unitario en ese archivo." + (/\.pdf$/i.test(f.name) ? " Si el PDF es escaneado (una foto), no se puede leer: use el Word o el Excel." : ""));
+        await revisarYAplicar(id, d, mejor, f.name);
       } })),
       h("div", { class: "o" }, "o"),
       pegar,
@@ -1223,13 +1256,26 @@ async function aplicarPresupuesto(id, d, r) {
 }
 
 // Lee una tabla de presupuesto (filas = arreglos). Misma lógica del Excel: busca la fila de títulos.
+// Muestra lo leído de una cotización u orden para revisarlo antes de cargarlo
+function revisarYAplicar(id, d, r, nombre) {
+  const cd = r.items.reduce((t, i) => t + i.cantidad * i.vu, 0);
+  const capa = h("div", { class: "hoja-capa" }, h("div", { class: "hoja" },
+    h("div", { class: "t-nom" }, `${r.items.length} ítems leídos`), h("div", { class: "t-sub" }, nombre),
+    h("div", { class: "kpis" }, kpi("Costo directo", pesos(cd), "suma de los ítems"), kpi("Valor total", r.total ? pesos(r.total) : "—", r.total && cd ? "AIU/IVA " + pct(r.total / cd - 1) : "no lo encontré")),
+    h("div", { class: "revision-items" }, r.items.slice(0, 60).map(i => h("div", { class: "fila-mat" }, h("div", { class: "fm-txt" }, h("div", { class: "fm-nom" }, `${i.codigo} ${i.descripcion}`),
+      h("div", { class: "fm-sub" }, `${num(i.cantidad)} ${i.und} × ${pesos(i.vu)} = ${pesos(i.cantidad * i.vu)}`))))),
+    h("button", { class: "btn grande", onclick: () => { capa.remove(); aplicarPresupuesto(id, d, r); } }, "Cargar estos ítems"),
+    h("button", { class: "btn sec", onclick: () => capa.remove() }, "Cancelar")));
+  document.body.append(capa);
+}
 function leerPresupuesto(filas) {
   const norm = v => String(v ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
   const numero = v => {
     if (typeof v === "number") return v;
     let s = String(v ?? "").replace(/\$/g, "").replace(/\s/g, "");
     if (!s) return NaN;
-    if (/,\d{1,2}$/.test(s) && s.includes(".")) s = s.replace(/\./g, "").replace(",", ".");
+    if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, "");          // 12.500 (miles con punto)
+    else if (/,\d{1,2}$/.test(s) && s.includes(".")) s = s.replace(/\./g, "").replace(",", ".");
     else if (/,\d{1,2}$/.test(s)) s = s.replace(",", ".");
     else s = s.replace(/,/g, "");
     return Number(s);
