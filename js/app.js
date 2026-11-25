@@ -76,15 +76,24 @@ function etiquetaItem(it) { return it.etiqueta || ((it.codigo ? it.codigo + " 鈥
 function ir(hash) { location.hash = hash; }
 
 // ------------------------------------------------------------------ estado de sincronizaci贸n
-async function pintarSync() {
-  const n = await db.contarPendientes();
-  const el = $("#sync"); if (!el) return;
-  const linea = navigator.onLine ? "En l铆nea" : "Sin internet";
-  el.className = "sync " + (navigator.onLine ? "on" : "off");
-  el.textContent = `${linea} 路 ${n === 0 ? "todo guardado" : n + " cambio" + (n === 1 ? "" : "s") + " guardado" + (n === 1 ? "" : "s") + " en el celular"}`;
+// Aviso de conexi贸n: aparece unos segundos cuando cambia el estado (o al abrir sin internet) y luego se esconde
+let aviso = null, avisoTimer = null;
+function avisarConexion() {
+  aviso = navigator.onLine ? { txt: "Conectado de nuevo", cls: "on" } : { txt: "Sin internet 路 lo que registre queda guardado en el celular", cls: "off" };
+  aviso.hasta = Date.now() + 4000;
+  pintarSync();
 }
-db.alCambiar(pintarSync);
-addEventListener("online", pintarSync); addEventListener("offline", pintarSync);
+function pintarSync() {
+  const el = $("#sync"); if (!el) return;
+  const visible = aviso && Date.now() < aviso.hasta;
+  el.hidden = !visible;
+  if (!visible) return;
+  el.className = "sync " + aviso.cls; el.textContent = aviso.txt;
+  clearTimeout(avisoTimer);
+  avisoTimer = setTimeout(() => { el.classList.add("sale"); setTimeout(() => { el.hidden = true; el.classList.remove("sale"); }, 350); }, aviso.hasta - Date.now());
+}
+addEventListener("online", avisarConexion); addEventListener("offline", avisarConexion);
+if (!navigator.onLine) setTimeout(avisarConexion, 300);
 
 // ------------------------------------------------------------------ c谩lculos de una obra
 async function cargarObra(id) {
